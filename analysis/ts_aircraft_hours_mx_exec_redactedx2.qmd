@@ -1,0 +1,1938 @@
+---
+title: "Aircraft Usage & Maintenance Analysis"
+author: "Will Schneider"
+format:
+  html:
+    theme: yeti
+    toc: true
+    toc-location: left
+    toc-depth: 4 
+    page-layout: full
+    max-width: 100%
+    embed-resources: true
+    self-contained: true
+    css: print.css
+execute:
+  echo: false 
+  warning: false
+  fig-width: 10
+  out-width: "100%"
+  column: page
+editor: visual
+---
+
+```{r}
+#| message: false
+#| warning: false
+
+# optionally set global chunk options
+# knitr::opts_chunk$set(echo=TRUE, warning=FALSE)
+
+library(readxl)
+library(tswge)
+library(vars)
+library(readxl)
+library(dplyr)
+library(urca)
+library(tseries)
+library(astsa)
+library(tidyverse)
+library(zoo)
+library(ggplot2)
+library(scales)
+```
+
+```{r}
+##### Import Data
+setwd("C:/Users/wschneider/Documents/Aircraft - Time Series Analysis/")
+
+fhrs <- read_excel("data.xlsx", sheet = "Flight Hours - Data")
+fhrs <- fhrs %>% select(-Charter,-Date) %>% group_by(Month,Aircraft) %>% summarise(
+  total_flight_hours = sum(`Flight Hours`, na.rm = TRUE)) %>% ungroup()
+mx <- read_excel("data.xlsx", sheet = "MX Costs - Data")
+
+#create master & plane-specific dataframes
+df <- mx %>%
+  left_join(fhrs, by = c("Month","Aircraft")) %>%
+  select(c("Aircraft","Month", "Total Maintenance", "total_flight_hours"))
+glex_df <- df %>% filter(Aircraft == "Global Express") %>% select(-Aircraft)
+lear_df <- df %>% filter(Aircraft == "Learjet60") %>% select(-Aircraft)
+
+#extract the numeric data
+mat <- as.matrix(glex_df %>% select(-Month)) #GLOBAL
+#build ts object (April 2021 → start = c(2021,4))
+glex_ts_df <- ts(mat,start = c(2021, 4), frequency = 12)
+
+mat <- as.matrix(lear_df %>% select(-Month)) #LEAR
+lear_ts_df <- ts(mat,start = c(2022, 5), frequency = 12)
+```
+
+
+# Global Express {.no-break}
+
+::: callout-important
+## Executive summary
+
+-   **Maintenance:** recurring quarterly cost waves with short reversals; align inspections and spares to this rhythm.\
+-   **Flight hours:** upward drift with a 2–3-month operating rhythm and strong near-term persistence.\
+-   **Planning horizon:** 1–4 months where signal exists; otherwise treat as event-driven.\
+-   **Data window**: \[Apr-2021 – July-2025\]. Last updated: 2025-09-09.
+:::
+
+## Analysis {.no-break}
+
+## Variable Analysis {.no-break}
+
+### Maintenance {.no-break}
+
+```{r}
+#A. Estimate the Trend Component
+global_ex.mx = glex_ts_df[, "Total_Maintenance"]
+global_ex.mx.yr=aggregate(global_ex.mx,FUN=mean) #annual data
+# Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
+global_ex.mx.12=ma.smooth.wge(global_ex.mx,order=12,plot=FALSE)
+global_ex.mx.sm12=ts(global_ex.mx.12$smooth,start=c(2021,1),frequency=12)
+
+#B. Remove the Trend Component from the Data
+global_ex.seas.mx=global_ex.mx-global_ex.mx.sm12 #Isolate Seasonality + Noise
+# end(na.omit(global_ex.mx - global_ex.mx.sm12)) #sanity check
+#C. Calculate an “Average” Within- year Seasonal Component
+global_ex.seas.mx.numeric=as.numeric(na.omit(global_ex.seas.mx))
+# convert to a matrix (ncol= number of years)
+# will give monthly means beginning with first non-na month
+global_ex.seas.mx.matrix=matrix(global_ex.seas.mx.numeric,nrow = 12)
+global_ex.seas.mx.matrix.t=t(global_ex.seas.mx.matrix)
+global_ex.mx.months=colMeans(global_ex.seas.mx.matrix.t, na.rm=TRUE)
+# replicates the 12 monthly means for each year (12)
+first_ok <- start(na.omit(global_ex.seas.mx))
+end_ok   <- end(na.omit(global_ex.seas.mx))
+len_ok   <- length(na.omit(global_ex.seas.mx))
+global_ex.mx.seas.means=rep(global_ex.mx.months,6) 
+global_ex.mx.seas.means=ts(global_ex.mx.seas.means,start=first_ok,frequency=12,end = end_ok)
+
+#D. Find the Remaining Noise Component
+global_ex.mx.noise=global_ex.mx-global_ex.mx.sm12-global_ex.mx.seas.means #Noise Estimate
+
+#Plot Data
+# Data
+t_idx <- time(global_ex.mx) # 1. get the fractional‐year index
+breaks_frac <- seq(min(t_idx), max(t_idx), by = 0.25) # 2. define the breaks(0.25 year)
+# 3. turn into real Dates & labels
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(global_ex.mx, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (global_ex)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+
+# Trend
+tmas_idx <- time(na.omit(global_ex.mx.sm12))
+breaks_frac <- seq(min(tmas_idx), max(tmas_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(na.omit(global_ex.mx.sm12), style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (Est. Trend)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Season
+tsm_idx_mx <- time(na.omit(global_ex.mx.seas.means))
+breaks_frac <- seq(min(tsm_idx_mx), max(tsm_idx_mx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(global_ex.mx.seas.means, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (Seasonal Component)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Noise
+tnz_idx <- time(na.omit(global_ex.mx.noise))
+breaks_frac <- seq(min(tnz_idx), max(tnz_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(global_ex.mx.noise, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (Noise)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+```
+
+| Trend | Seasonality/Cycle   | Near-term persistence |
+|-------|---------------------|-----------------------|
+| flat  | present (quarterly) | yes                   |
+
+#### Interpretation of Time Series Components
+
+Monthly costs show short‑term reversals and a recurring cycle about every 4 months, matching the ACF and spectrum.
+
+[**Trend:**]{.underline} Shows the general, long-term direction of maintenance costs over time. It helps us understand whether costs are generally rising, falling, or remaining stable.
+
+[**Seasonal:**]{.underline}Reflects predictable fluctuations within each year. Positive values indicate months when costs typically exceed the overall trend, and negative values indicate months when costs are typically below trend.
+
+[**Noise:**]{.underline} Represents unpredictable, irregular variations in maintenance costs. This is the **leftover variation** once the trend and seasonal patterns are accounted for.
+
+```{r}
+#Only returns the plot
+invisible(
+    capture.output(
+        plotts.sample.wge(glex_ts_df[,"Total_Maintenance"]),
+        file = NULL
+    )
+)
+
+invisible(
+    capture.output(
+        plotts.sample.wge(log(glex_ts_df[,"Total_Maintenance"]+1)),
+        file = NULL
+    )
+)
+
+```
+
+#### Interpretation of Sample Autocorrelations & Spectral Density
+
+[**Realization (left plot):**]{.underline}
+
+Monthly maintenance costs vary substantially month-to-month, with no consistent long-term upward or downward trend visible.
+
+**Takeaway:** plan for short bursts and pullbacks rather than a smooth trend.
+
+[**Autocorrelations (middle plot):**]{.underline}
+
+Autocorrelation measures how closely each month's costs depend on previous months. Costs exhibit moderate predictability every 3-4 months—high-cost months tend to be followed by lower-cost months several periods later, showing short-term reversals.
+
+**Takeaway:** near‑term scheduling and staffing can be adjusted on a 1–4 month horizon; beyond that, past values carry little signal.
+
+[**Spectral Density:**]{.underline}
+
+Spectral density identifies how strongly certain cycles repeat throughout the entire data set. Analysis reveals a robust quarterly pattern, confirming costs consistently cycle every 4 months ($1/f = 1/0.25 = 4$). This aligns directly with month-to-month observations from autocorrelation.
+
+**Takeaway:** expect recurring cost waves roughly every quarter; align inspections and spares accordingly.
+
+In short, maintenance costs demonstrate clear quarterly cyclicality, with costs alternating regularly, and this recurring pattern persists throughout the historical data.
+
+### Flight Hours {.break}
+
+```{r}
+global_ex.fhrs = glex_ts_df[, "total_flight_hours"]
+#A. Estimate the Trend Component
+global_ex.fhrs.yr=aggregate(global_ex.fhrs,FUN=mean) #annual data
+# Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
+global_ex.fhrs.12=ma.smooth.wge(global_ex.fhrs,order=12,plot=FALSE)
+global_ex.fhrs.sm12=ts(global_ex.fhrs.12$smooth,start=c(2021,1),frequency=12)
+
+#B. Remove the Trend Component from the Data
+global_ex.seas.fhrs=global_ex.fhrs-global_ex.fhrs.sm12 #Isolate Seasonality + Noise
+# end(na.omit(global_ex.fhrs - global_ex.fhrs.sm12)) #sanity check
+
+#C. Calculate an “Average” Within- year Seasonal Component
+global_ex.seas.fhrs.numeric=as.numeric(na.omit(global_ex.seas.fhrs))
+# convert to a matrix (ncol = years, nrow = months)
+# will give monthly means beginning with first non-na month
+global_ex.seas.fhrs.matrix=matrix(global_ex.seas.fhrs.numeric,nrow = 12)
+global_ex.seas.fhrs.matrix.t=t(global_ex.seas.fhrs.matrix)
+global_ex.fhrs.months=colMeans(global_ex.seas.fhrs.matrix.t, na.rm=TRUE)
+# replicates the 12 monthly means for each year (5)
+first_ok <- start(na.omit(global_ex.seas.fhrs))
+end_ok   <- end(na.omit(global_ex.seas.fhrs))
+len_ok   <- length(na.omit(global_ex.seas.fhrs))
+global_ex.fhrs.seas.means=rep(global_ex.fhrs.months,6) 
+global_ex.fhrs.seas.means=ts(global_ex.fhrs.seas.means,start=first_ok,frequency=12,end = end_ok)
+
+#D. Find the Remaining Noise Component
+global_ex.fhrs.noise=global_ex.fhrs-global_ex.fhrs.sm12-global_ex.fhrs.seas.means #Noise Estimate
+
+#Plot Data
+# Data
+t_idx <- time(global_ex.fhrs) # 1. get the fractional‐year index
+breaks_frac <- seq(min(t_idx), max(t_idx), by = 0.25) # 2. define the breaks(0.25 year)
+# 3. turn into real Dates & labels
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(global_ex.fhrs, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (global_ex)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+
+# Trend
+tmas_idx <- time(na.omit(global_ex.fhrs.sm12))
+breaks_frac <- seq(min(tmas_idx), max(tmas_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(na.omit(global_ex.fhrs.sm12), style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (Est. Trend)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Season
+tsm_idx_fhrs <- time(na.omit(global_ex.fhrs.seas.means))
+breaks_frac <- seq(min(tsm_idx_fhrs), max(tsm_idx_fhrs), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(global_ex.fhrs.seas.means, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (Seasonal Component)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Noise
+tnz_idx <- time(na.omit(global_ex.fhrs.noise))
+breaks_frac <- seq(min(tnz_idx), max(tnz_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(global_ex.fhrs.noise, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (Noise)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+```
+
+```{r}
+#Only returns the plot
+invisible(
+    capture.output(
+        plotts.sample.wge(glex_ts_df[,"total_flight_hours"]),
+        file = NULL
+    )
+)
+
+```
+
+| Trend | Seasonality/Cycle | Near-term persistence |
+|-------|-------------------|-----------------------|
+| flat  | weak              | no                    |
+
+#### Interpretation of Sample Autocorrelations & Spectral Density
+
+Monthly flight activity shows sharp month-to-month swings with no stable long-term trend.
+
+[**Overall Pattern:**]{.underline}\
+Flight hours exhibit high month-to-month volatility without a clear upward or downward long-term trend. Activity fluctuates sharply, reflecting erratic flight demands.
+
+[**Month-to-Month Dependence (Autocorrelation):**]{.underline}\
+There is minimal short-term persistence—previous months provide little predictive insight. However, a faint yearly rhythm (12-14 months) suggests that certain months may mildly repeat patterns seen one year earlier, though this pattern is subtle.
+
+**Takeaway:** past values add limited predictive value beyond the next few months; avoid assuming carryover effects and treat spikes as transient rather than persistent.
+
+[**Recurring Cycles (Spectral Analysis**]{.underline}**):**\
+Spectral analysis shows only a weak indication of a 3-month cycle. Unlike maintenance costs, there's no clear, strong cyclic pattern here.
+
+**Takeaway:** no durable seasonal cycle; plan hours on observed demand and operations, not on fixed seasonality.
+
+[**Bottom line:**]{.underline} use external drivers and operational context for planning; naive extrapolation of monthly hours is weak.
+
+### Variable Comparison {.break}
+
+### MX & Flight Hours
+
+```{r}
+# 1) Combine Data to Dataframe
+df <- data.frame(
+  Date        = as.Date(as.yearmon(time(global_ex.mx))),
+  Maintenance = as.numeric(global_ex.mx),
+  FlightHours = as.numeric(global_ex.fhrs)
+)
+
+# 2) Compute a scale factor so FlightHours*factor ≈ Maintenance range
+ratio <- max(abs(df$Maintenance), na.rm=TRUE) / 
+         max(abs(df$FlightHours), na.rm=TRUE)
+
+# 3) Plot with left axis = Maintenance, right axis = FlightHours
+ggplot(df, aes(x=Date)) +
+  geom_bar(aes(y = Maintenance,color = "Maintenance"),stat="identity",alpha = 0.55) +
+  geom_line(aes(y = FlightHours*ratio,color = "Flight Hours"),size = 1) +
+  scale_y_continuous(
+    name    = "MX Costs",
+    labels  = label_number(scale=1/1000, prefix="$", suffix="K"),
+    sec.axis = sec_axis(~./ratio, name="Flight Hours")
+  ) +
+  scale_color_manual(
+    name   = NULL,
+    values = c("Maintenance"="steelblue", "Flight Hours"="firebrick")
+  ) +
+  scale_x_date(
+    breaks      = seq(min(df$Date), max(df$Date), by = "3 months"),
+    date_labels = "%b %Y",
+    expand      = c(0,0)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x    = element_text(angle = 90, vjust = 0.5, size = 8),
+    legend.position = "bottom"
+  ) +
+  ggtitle("MX Costs vs Flight Hours")
+```
+
+### Seasonality
+
+```{r}
+# full‐length maintenance
+mx_ts    <- global_ex.mx
+df_full  <- data.frame(
+  Date        = as.Date(as.yearmon(time(mx_ts))),
+  Maintenance = as.numeric(mx_ts)
+)
+
+# seasonal maintenance (shorter)
+seas_ts   <- global_ex.mx.seas.means
+df_seas  <- data.frame(
+  Date                  = as.Date(as.yearmon(time(seas_ts))),
+  Maintenance_Seasonal  = as.numeric(seas_ts)
+)
+
+#ratio 
+ratio <- max(abs(df_full$Maintenance), na.rm=TRUE) / 
+         max(abs(df_seas$Maintenance_Seasonal), na.rm=TRUE)
+
+
+ggplot() +
+  geom_line(
+    data = df_full,
+    aes(x = Date, y = Maintenance),
+    color = "steelblue",
+    size  = 0.8
+  ) +
+  geom_line(
+    data = df_seas,
+    aes(x = Date, y = Maintenance_Seasonal),
+    color     = "firebrick",
+    size      = 0.8,
+    linetype  = "dashed"
+  ) + 
+  scale_y_continuous(
+    name    = "MX Costs",
+    labels  = label_number(scale=1/1000, prefix="$", suffix="K")
+  ) +
+  scale_x_date(
+    breaks      = seq(min(df_full$Date), max(df_full$Date), by = "3 months"),
+    date_labels = "%b %Y",
+    expand      = c(0,0)
+  ) +
+  labs(
+    title = "Original vs. Seasonal Maintenance",
+    x     = "Date",
+    y     = "Maintenance Cost"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x     = element_text(angle = 90, vjust = 0.5),
+    legend.position = "none"
+  )
+```
+
+```{r}
+# 1) Your two seasonal series, with Date index
+mx_seas <- global_ex.mx.seas.means
+fh_seas <- global_ex.fhrs.seas.means
+dates   <- as.Date(as.yearmon(time(mx_seas)))
+
+df <- data.frame(
+  Date        = dates,
+  Maintenance = as.numeric(mx_seas),
+  FlightHours = as.numeric(fh_seas)
+)
+
+# 2) Compute a scale factor so FlightHours*factor ≈ Maintenance range
+ratio <- max(abs(df$Maintenance), na.rm=TRUE) / 
+         max(abs(df$FlightHours), na.rm=TRUE)
+
+# 3) Plot with left axis = Maintenance, right axis = FlightHours
+ggplot(df, aes(x=Date)) +
+  geom_line(aes(y = Maintenance,color = "Maintenance"),size = 1) +
+  geom_line(aes(y = FlightHours*ratio,color = "Flight Hours"),size = 1) +
+  scale_y_continuous(
+    name    = "MX seasonal effect",
+    labels  = label_number(scale=1/1000, prefix="$", suffix="K"),
+    sec.axis = sec_axis(~./ratio, name="Flight Hours")
+  ) +
+  scale_color_manual(
+    name   = NULL,
+    values = c("Maintenance"="steelblue", "Flight Hours"="firebrick")
+  ) +
+  scale_x_date(
+    breaks      = seq(min(df$Date), max(df$Date), by = "3 months"),
+    date_labels = "%b %Y",
+    expand      = c(0,0)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x    = element_text(angle = 90, vjust = 0.5, size = 8),
+    legend.position = "bottom"
+  ) +
+  ggtitle("MX Costs vs Flight Hours (Seasonal)")
+
+```
+
+## Vector Autoregression (VAR) Analysis
+
+### Model Selection
+
+**What this does:** Forecasts next-month maintenance and hours together so each can inform the other.
+
+**Why this matters:** Produces consistent month-ahead projections for both series and captures cross-effects without over-relying on any single trend.
+
+```{r}
+ccf(log(glex_ts_df[,"Total_Maintenance"] + 1), glex_ts_df[,"total_flight_hours"])
+#Indicates a lag correlation of 9 months!
+# ── 0. Setup ─────────────────────────────────────────────────────────────
+log_mx <- log(glex_ts_df[,"Total_Maintenance"] + 1) 
+hrs    <- glex_ts_df[,"total_flight_hours"]
+Y      <- cbind(log_mx, hrs)
+
+# ── 1. Stationarise each series ─────────────────────────────────────────
+#Run KPSS on each (type = "mu" tests for stationarity around a mean)
+kpss_log  <- ur.kpss(log_mx, type = "mu", lags = "short")
+kpss_hrs  <- ur.kpss(hrs,    type = "mu", lags = "short")
+print(paste0("The Logged MX Data is: ",if(kpss_log@teststat > kpss_log@cval[2]) "Non-Stationary" else "Stationary ", "(0.05 confidence level)"))
+print(paste0("The Logged MX Data is: ",if(kpss_hrs@teststat > kpss_hrs@cval[2]) "Non-Stationary" else "Stationary ", "(0.05 confidence level)"))
+
+is_stationary <- function(x) {
+  kpss <- ur.kpss(x, type = "mu", lags = "short")
+  kpss@teststat < kpss@cval[2]}
+
+Y_stable <- apply(Y, 2, function(x) if (is_stationary(x)) x else diff(x))
+m <- min(lengths(Y_stable))
+
+Y_stable <- do.call(cbind, lapply(Y_stable, function(x) tail(x, m)))
+#one period after Y’s first observation
+Y_stable <- ts(Y_stable, start = time(Y)[2], frequency = frequency(Y))
+
+# ── 2. Trend test (WBG) ─────────────────────────────────────────────────
+needs_trend <- function(x) {
+  wbg <- wbg.boot.wge(x, pvalue = TRUE)
+  wbg$pv < 0.05}
+
+trend_flags   <- apply(Y_stable, 2, needs_trend) #Y_stable
+include_trend <- any(trend_flags)
+include_const <- any(colMeans(Y_stable, na.rm = TRUE) != 0) #Y_stable
+
+type_choice <- if (include_trend & include_const) {"both"
+  } else if (include_trend) {"trend"
+  } else if (include_const) {"const"
+  } else {"none"}
+
+# ── 3. Lag-order selection ──────────────────────────────────────────────
+#lag.max = 9 b/c ccf plot of variables
+ic   <- VARselect(Y_stable, lag.max = 9, type = type_choice)
+popt <- ic$selection["AIC(n)"] # or majority vote
+
+# ── 4. Fit VAR and diagnose ─────────────────────────────────────────────
+fit  <- VAR(Y_stable, p = popt , type = type_choice) #using 4 based on sample plots and CCF
+
+# Ljung-Box (white-noise check) – repeat per equation if > 1 series
+ljung.wge(resid(fit)[,1], p = popt, K = 12)$pval
+ljung.wge(resid(fit)[,1], p = popt, K = 24)$pval
+```
+
+### Testing {.break}
+
+**What this does:** We hold out the last six months, fit the model on earlier data, forecast six steps, and compare forecasts to actuals. All results are returned to original units for a direct, apples-to-apples check of accuracy.
+
+[^1]
+
+[^1]: Monthly data; last 6 months held out for testing; forecasts shown in original units after any transformations.
+
+```{r}
+# ── 5. Forecast 12 months ahead & evaluate ──────────────────────────────
+split_pt      <- end(na.omit(global_ex.seas.fhrs))                  # Apr-2024 cutoff
+st_pt         <- c(split_pt[1] - 1, split_pt[2])
+train_idx     <- window(glex_ts_df, end = split_pt)
+test_idx      <- window(glex_ts_df, start = st_pt)
+
+log_mx_tr     <- log(train_idx[,"Total_Maintenance"] + 1)
+hrs_tr        <- train_idx[,"total_flight_hours"]
+Y_tr_stable  <- window(Y_stable, end = split_pt)
+
+var_mod       <- VAR(cbind(log_mx_tr, hrs_tr),
+                     p = 4, type = type_choice)
+var_mod   <- VAR(as.matrix(Y_tr_stable), p = popt, type = type_choice)
+fcast         <- predict(var_mod, n.ahead = 6)$fcst$log_mx[,1]
+rmse_log      <- sqrt(mean((tail(log_mx,6) - fcast)^2))
+rmse_log
+# back-transform
+mx_hat        <- exp(fcast) - 1
+rmse_raw      <- sqrt(mean((test_idx[,"Total_Maintenance"] - mx_hat)^2))
+rmse_raw
+
+# ── 6. Plot actual vs. forecast ─────────────────────────────────────────
+times     <- as.numeric(time(glex_ts_df))
+test_t    <- tail(times,6)
+# forecasts
+plot(times, glex_ts_df[,"Total_Maintenance"], type = "o", pch = 20,
+     ylab = "Maintenance ($)", xlab = "Time")
+points(test_t, mx_hat, type = "o", pch = 1, col = 2)
+legend("topleft", legend = c("Actual", "Forecast"), pch = c(20,1), col = c(1,2))
+```
+
+### Deployment {.break}
+
+**What this does:** We refit on the full history and generate multi-step forecasts for both series. We publish maintenance on its original scale and include hours as needed for planning and capacity decisions.
+
+*Forecasts are most reliable inside 1–3 months; uncertainty widens beyond that.*
+
+```{r}
+Y_full   <- cbind(
+  log_mx = log(glex_ts_df[,"Total_Maintenance"] + 1), hrs = glex_ts_df[,"total_flight_hours"])
+var_full <- VAR(Y_full, p = popt, type = type_choice,)
+
+fc_full  <- predict(var_full, n.ahead = 6, ci = 0.95)$fcst
+
+# 1) Extract and back-transform maintenance forecasts
+log_fc       <- fc_full$log_mx[,"fcst"]
+log_lo   <- fc_full$log_mx[,"lower"]
+log_hi   <- fc_full$log_mx[,"upper"]  # provided 
+
+# 2) Back‐transform log‐forecast
+mx_fc <- exp(log_fc-1)
+mx_lo <- exp(log_lo-1)
+mx_hi <- exp(log_hi-1)
+
+```
+
+```{r}
+## Delta-Method Transform (Taylor Linearization) for CIs on $ scale
+## Use when back-transformed (exp) 95% upper CIs explode off-chart due to large log-scale SE.
+## Centers at the median on $; builds an approximate additive CI via delta method.
+## Revert to default (comment this block out) when log-scale SE is modest (e.g., max(se) < ~0.5)
+## or when you want equal-tailed lognormal bands instead of an approximate additive band.
+
+ci <- 0.95
+z  <- qnorm(1 - (1 - ci)/2)
+
+# 1) Get VAR forecast on log scale and infer log-scale SE from predict() bounds
+fc <- predict(var_full, n.ahead = 6, ci = ci)$fcst$log_mx
+mu <- fc[,"fcst"]                          # E[log(MX+1)] ≈ μ
+se <- (fc[,"upper"] - mu) / z              # σ on log scale implied by CI
+
+# 2) Point forecast on $ scale = median of lognormal (avoid mean inflation)
+# analytic slope at the point
+slope <- exp(mu)
+mx_fc <- slope - 1
+
+# 3) Delta-method SE on $ scale: Var(exp(Y)) ≈ [exp(μ)]^2 * σ^2  ⇒  SE_$ ≈ exp(μ)*σ
+se_d  <- slope * se   # dollar-scale SE
+
+# 4) Additive CI on $ scale (truncate lower at 0). Avoids exp(z*σ) blow-up.
+mx_lo <- pmax(0, mx_fc - z*se_d)
+mx_hi <-  mx_fc + z*se_d
+
+# ---- When to turn ON (keep this block):
+# - Upper CI on $ from exp(lo/hi) is unusably large.
+# - Communicating in dollars is required, not logs.
+
+# ---- When to turn OFF (comment out this block and use default back-transform):
+# - σ is small/moderate and default lognormal CIs are stable.
+# - You need equal-tailed intervals on the log scale.
+# Default back-transform for reference:
+# mx_fc <- exp(mu)            - 1
+# mx_lo <- exp(fc[,"lower"])  - 1
+# mx_hi <- exp(fc[,"upper"])  - 1
+
+```
+
+```{r}
+# 3) Turn both into ts objects with monthly frequency
+actual_ts   <- ts(glex_ts_df[,"Total_Maintenance"], start = start(glex_ts_df), 
+                  frequency = 12)
+
+# The forecast starts the month after the last observation:
+last_time   <- time(actual_ts)[length(actual_ts)]
+# Compute year + fraction for the first forecast
+first_fc    <- last_time + 1/12
+
+# Forecasts
+forecast_ts <- ts(mx_fc,
+                  start = c(floor(first_fc),round(12 * (first_fc %% 1)) + 1),
+                  frequency = 12)
+
+forecast_lo_ts <- ts(mx_lo, start = start(forecast_ts),
+                     frequency = frequency(forecast_ts))
+forecast_hi_ts <- ts(mx_hi, start = start(forecast_ts),
+                     frequency = frequency(forecast_ts))
+
+# 3) Plot actual & forecast together
+plot(actual_ts, type  = "o", pch   = 20, col   = "black",
+     xlim  = c(time(actual_ts)[1],
+               time(forecast_ts)[length(forecast_ts)]),
+     ylab  = "Maintenance ($)", xlab  = "Time")
+lines(forecast_ts, type = "o", pch  = 1, col  = "red")
+lines(forecast_lo_ts, lty=2, col="blue")
+lines(forecast_hi_ts, lty=2, col="blue")
+legend("topleft", legend = c("Actual","Forecast"), pch = c(20,1), 
+       col = c("black","red")
+)
+```
+
+## VARX: Nowcasting Maintenance with Known Same‑Month Flight Hours
+
+### Preface
+
+::: callout-important
+**Bottom line:** When current-month flight hours are known, VARX gives a better same-month maintenance nowcast and keeps multi-month forecasts aligned with operations.
+:::
+
+We receive flight hours for month t about two weeks before maintenance costs for month t are finalized. A standard VAR uses only past values and cannot use those known same-month hours. VARX solves this by keeping **maintenance** as the modeled series and adding **flight hours** (current month plus optional lags) as external inputs. This lets us publish a maintenance nowcast for month t as soon as hours for t are available and uses the 0–2 week information lead on hours.
+
+**Why show VARX next to the baseline VAR** - **VAR:** joint model using lags only. Use when current hours are not yet known. - **VARX:** adds known current hours H_t (and recent lags if helpful). Use when hours arrive first and you need a same-month maintenance nowcast.
+
+**Process** This mirrors the baseline VAR workflow with one change: hours are added as external inputs. Stability checks, constant or trend selection, lag order p, diagnostics, backtesting, and deployment remain the same.
+
+------------------------------------------------------------------------
+
+### VARX Model Selection (hours as exogenous)
+
+#### Parts & Labor as Additional Endogenous Variables
+
+Because VAR works with at least 2 endogenous variables, and because we are turning Flight Hours into a exogenous variables for the purpose of maintaining more realistic modeling expectations of the flow and delivery sequences of the data, we will include two additional variables in additional to Total Maintenance. These are Parts & Labor, which are sub-costs of Total Maintenance. In addition to improving the functionality of the model, these variables may also prove to explain additional makeup of the analyses and forecasts.
+
+
+```{r}
+# ── 0) Setup ────────────────────────────────────────────────────────────
+df <- mx %>% left_join(fhrs, by = c("Month","Aircraft")) %>% select(c("Aircraft","Month", "Total_Maintenance", "Parts", "Labor", "total_flight_hours"))
+glex_df <- df %>% filter(Aircraft == "Global Express") %>% select(-Aircraft)
+
+#extract the numeric data
+mat <- as.matrix(glex_df %>% select(-Month)) #GLOBAL
+#build ts object (April 2021 → start = c(2021,4))
+glex_ts_df <- ts(mat,start = c(2021, 4), frequency = 12)
+
+# --- Endogenous Variables ---
+log_mx    <- log(glex_ts_df[,"Total_Maintenance"] + 1)
+log_parts <- log(glex_ts_df[,"Parts"] + 1)
+log_labor <- log(glex_ts_df[,"Labor"] + 1)
+Y_raw <- cbind(log_mx, log_parts,log_labor)
+colnames(Y_raw) <- c("log_mx","log_parts","log_labor")
+
+# Endogenous target (what we forecast):
+# Use levels if stationary; otherwise difference. (Your KPSS has typically found log_mx stationary.)
+is_stationary <- function(x) { k <- ur.kpss(x, type = "mu", lags = "short"); k@teststat < k@cval[2] }
+Y_endog <- lapply(1:ncol(Y_raw), function(j){
+  x <- as.numeric(Y_raw[,j])
+  if (is_stationary(x)) x else c(NA, diff(x))
+  })
+names(Y_endog) <- colnames(Y_raw)
+Y_endog
+
+# --- Exogenous hours in levels with lags by slicing (keeps tail) ---
+hrs    <- glex_ts_df[,"total_flight_hours"]
+# Exogenous block: contemporaneous hours and 1–2 lags (adjust as needed).
+# If prefer stationarity in X, replace hrs with diff(hrs) below.
+X_exog <- cbind(H_t = hrs, 
+                L1  = c(NA, head(hrs, -1)), 
+                L2  = c(NA, NA, head(hrs, -2)))
+
+# --- VAR-style alignment: keep the last m rows across Y and X ---
+m <- min(c(sapply(Y_endog, length), sapply(X_exog, length)))
+Y_stable <- do.call(cbind, lapply(Y_endog, function(x) tail(x, m)))
+X_stable <- do.call(cbind, lapply(X_exog, function(x) tail(x, m)))
+# Drop a common number of leading rows until no NA remains (lags created head NAs)
+nlead <- function(v){ i <- which(!is.na(v))[1]; if (is.na(i)) length(v) else i-1 }
+drop  <- max(apply(cbind(Y_stable, X_stable), 2, nlead), na.rm=TRUE)
+Y <- Y_stable[(drop+1):nrow(Y_stable), , drop=FALSE]
+X <- X_stable[(drop+1):nrow(X_stable), , drop=FALSE]
+# ts metadata
+start_time <- time(glex_ts_df)[nrow(glex_ts_df) - nrow(Y) + 1]
+Y <- ts(Y, start=start_time, frequency=frequency(glex_ts_df))
+X <- ts(X, start=start_time, frequency=frequency(glex_ts_df))
+
+
+# ── 1) Deterministic term via WBG on the modeled series ────────────────
+needs_trend <- function(x) { x0 <- na.omit(as.numeric(x)); if (length(x0) < 12) return(FALSE); wbg.boot.wge(x0, pvalue = TRUE)$pv < 0.05 }
+include_trend <-apply(Y, 2, needs_trend)
+include_const <- any(colMeans(Y, na.rm=TRUE) != 0)
+type_choice <- if (any(include_trend) && include_const) "both" else
+               if (any(include_trend)) "trend" else
+               if (any(include_const)) "const" else "none"
+
+# ── 2) Lag‑order selection with exogenous regressors ───────────────────
+ic   <- VARselect(Y, lag.max = 6, type = type_choice, exogen = X)
+popt <- ic$selection[["AIC(n)"]]
+
+# ── 3) Fit VARX (endogenous = maintenance; exogenous = hours & lags) ───
+fit_varx <- VAR(Y, p=popt, type=type_choice, exogen=X, lag.max = 6)
+
+# ── 4) Residual diagnostics ────────────────────────────────────────────
+# Per‑equation Ljung–Box on maintenance residuals
+lb12 <- apply(resid(fit_varx), 2, function(e) ljung.wge(e, p = popt, K = 12)$pval)
+lb24 <- apply(resid(fit_varx), 2, function(e) ljung.wge(e, p = popt, K = 24)$pval)
+```
+
+### VARX Backtest on a Split (uses realized hours as exogenous path)
+
+When hours for month t are known, build `X_future` with H_t and its lags ($\H_{t−1}, H_{t−2}$).
+
+```{r}
+# ===== TESTING (hold out last h; realized hours path) =====
+h   <- 6
+Tn  <- nrow(Y)
+Y_tr <- Y[1:(Tn-h), , drop=FALSE];  X_tr <- X[1:(Tn-h), , drop=FALSE]
+Y_te <- Y[(Tn-h+1):Tn, , drop=FALSE]; X_te <- X[(Tn-h+1):Tn, , drop=FALSE]
+
+# reselection on train (same as VAR)
+ic_tr <- VARselect(Y_tr, lag.max = 6, type = type_choice, exogen = X_tr)
+p_tr  <- ic_tr$selection[["AIC(n)"]]
+
+fit_tr <- VAR(Y_tr, p = p_tr, type = type_choice, exogen = X_tr, lag.max = 6)
+
+# forecast the holdout using realized exogenous path
+pred_te <- predict(fit_tr, n.ahead = h, ci = 0.95, dumvar = X_te)$fcst
+
+# back-transform MX (equal-tailed bands; swap to delta-method if needed)
+log_fc <- pred_te$log_mx[,"fcst"]
+mx_hat <- exp(log_fc) - 1
+
+# testing metrics and plot (same style as your VAR)
+actual_ts <- ts(glex_ts_df[,"Total_Maintenance"], start=start(glex_ts_df), frequency=12)
+mx_obs    <- tail(actual_ts, h)
+rmse_raw  <- sqrt(mean((as.numeric(mx_obs) - mx_hat)^2, na.rm=TRUE))
+
+# align forecasts to holdout timestamps, then plot
+first_test_time <- time(actual_ts)[length(actual_ts) - h + 1]
+fc_ts <- ts(mx_hat, start = first_test_time, frequency = frequency(actual_ts))
+
+plot(actual_ts, type="o", pch=20, ylab="Maintenance ($)", xlab="Time")
+lines(fc_ts,  type="o", pch=1, col=2)
+legend("topleft", c("Actual","Forecast"), pch=c(20,1), col=c(1,2), bty="n")
+
+# metrics
+rmse_raw <- sqrt(mean((as.numeric(mx_obs) - as.numeric(fc_ts))^2, na.rm=TRUE))
+nowcast_err_abs <- abs(as.numeric(mx_obs)[1] - as.numeric(fc_ts)[1])
+nowcast_err_pct <- nowcast_err_abs / max(1, as.numeric(mx_obs)[1])
+```
+
+```{r}
+## ===== VARX TESTING: rolling-origin =====
+# Pre-req: Y (log_mx, log_parts, log_labor), X (H_t,L1,L2), type_choice set.
+
+h   <- 6
+Tn  <- nrow(Y)
+idx0 <- Tn - h
+actual_ts <- ts(glex_ts_df[,"Total_Maintenance"], start=start(glex_ts_df), frequency=12)
+times <- time(actual_ts)
+
+# helper: build dumvar from realized hours
+build_X_future <- function(H_hist, H_future) {
+  k  <- length(H_future)
+  L1 <- if (k==1) tail(H_hist,1) else c(tail(H_hist,1), head(H_future, k-1))
+  L2 <- if (k==1) tail(H_hist,2)[1] else if (k==2) tail(H_hist,2) else c(tail(H_hist,2), head(H_future, k-2))
+  cbind(H_t = H_future, L1 = L1, L2 = L2)
+}
+
+# containers for h=1 nowcasts
+now_fc  <- numeric(h)
+now_obs <- as.numeric(tail(actual_ts, h))
+p_used  <- integer(h)
+starts  <- numeric(h)           # <-- add
+paths   <- vector("list", h)    # <-- add
+
+for (i in 1:h) {
+  t_end <- idx0 + (i - 1)
+  Y_tr  <- Y[1:t_end,,drop=FALSE];  X_tr <- X[1:t_end,,drop=FALSE]
+  p_o   <- VARselect(Y_tr, lag.max=6, type=type_choice, exogen=X_tr)$selection[["AIC(n)"]]
+  fit_o <- VAR(Y_tr, p=p_o, type=type_choice, exogen=X_tr, lag.max = 6)
+
+  k <- h - (i - 1)
+  H_hist <- as.numeric(X_tr[,"H_t"])
+  H_fut  <- as.numeric(X[(t_end+1):(t_end+k),"H_t"])
+  X_fut  <- build_X_future(H_hist, H_future = H_fut)
+
+  fc   <- predict(fit_o, n.ahead=k, ci=0.95, dumvar=X_fut)$fcst$log_mx
+  path <- expm1(fc[,"fcst"])                   # dollars
+  starts[i] <- time(actual_ts)[length(actual_ts) - h + i]
+  paths[[i]] <- path
+  now_fc[i]  <- path[1]                        # h=1 nowcast at this origin
+}
+
+# --- Plot A: actuals + nowcast dots ---
+par(mfrow=c(1,2), mar=c(4,4,2,1))
+plot(actual_ts, type="o", pch=20, ylab="Maintenance ($)", xlab="Time", main="A: Nowcast (h=1)")
+now_ts <- ts(now_fc, start=starts[1], frequency=frequency(actual_ts))
+points(now_ts, type="p", pch=1, col="red")
+legend("topleft", c("Actual","Nowcast (h=1)"), pch=c(20,1), col=c("black","red"), bty="n")
+
+# --- Plot B: rolling multi-step, colored by origin ---
+plot(actual_ts, type="l", ylab="Maintenance ($)", xlab="Time", main="B: Rolling multi-step")
+cols <- colorRampPalette(c("#d73027","#fc8d59","#fee08b","#91bfdb","#4575b4","#542788"))(h)
+for (i in 1:h) {
+  path_ts <- ts(paths[[i]], start=starts[i], frequency=frequency(actual_ts))
+  lines(path_ts, col=cols[i])
+  points(time(path_ts), as.numeric(path_ts), pch=1, col=cols[i])
+}
+par(mfrow=c(1,1))
+
+### DATA LEAKAGE AUDIT ###
+audit <- lapply(1:h, function(i){
+  t_end  <- idx0 + (i-1)
+  fc_idx <- t_end + 1
+  H_hist <- as.numeric(X[1:t_end,"H_t"])
+  H_tp1  <- as.numeric(X[fc_idx,"H_t"])
+  X_now  <- build_X_future(H_hist, H_future = c(H_tp1))
+  data.frame(
+    origin = i,
+    train_end_time = as.character(time(actual_ts)[fc_idx-1]),
+    fc_start_time  = as.character(time(actual_ts)[fc_idx]),
+    H_tp1_from_X   = H_tp1,
+    H_t_used       = X_now[,"H_t"],
+    L1_used        = X_now[,"L1"],
+    L1_should_be   = tail(H_hist,1),
+    L2_used        = X_now[,"L2"],
+    L2_should_be   = tail(H_hist,2)[1]
+  )
+})
+# do.call(rbind, audit)
+```
+
+### Deployment (full re‑fit) and multi‑step forecasts
+
+For horizons \>1, you must provide an **exogenous path** for hours: - **Nowcast** (h=1): use known H_t and known lags. - **Short‑term forecast** (h\>1): provide hour scenarios or forecast hours in a separate model and pass them via `dumvar`.
+
+#### Flight Hours
+
+In order to get a more accurate forecast, estimating flight hours via means, seasonality, and/or AR modeling will further improve the accuracy of the VARX model where Flight Hours is an endogenous variable
+
+```{r}
+h     <- 6
+H_tp1 <- 15                    # known next-month hours
+H_hist <- as.numeric(X[,"H_t"])
+
+# 1) Carry-forward (baseline)
+H_future_cf   <- c(H_tp1, rep(tail(H_hist,1), h-1))
+
+# 2) Rolling means
+H_future_ma3  <- c(H_tp1, rep(mean(tail(H_hist, 3)),  h-1))
+H_future_ma6  <- c(H_tp1, rep(mean(tail(H_hist, 6)),  h-1))
+H_future_ma12 <- c(H_tp1, rep(mean(tail(H_hist,12)),  h-1))
+
+# 3) Seasonal medians by calendar month
+cyc     <- cycle(ts(H_hist, frequency=12))
+mon_med <- tapply(H_hist, cyc, median, na.rm=TRUE)
+last_m  <- cyc[length(cyc)]
+mons    <- ((last_m+1):(last_m+h)) %% 12; mons[mons==0] <- 12
+H_future_seas <- c(H_tp1, mon_med[mons[2:h]])
+
+# 4) AR forecast for hours (base R)
+ar_fit  <- ar(ts(H_hist, frequency=12), aic=TRUE)
+H_future_ar <- c(H_tp1, as.numeric(predict(ar_fit, n.ahead=h-1)$pred))
+
+```
+
+```{r}
+## --- helper
+build_X_future <- function(H_hist, H_future){
+  k  <- length(H_future)
+  L1 <- if (k==1) tail(H_hist,1) else c(tail(H_hist,1), head(H_future,k-1))
+  L2 <- if (k==1) tail(H_hist,2)[1] else if (k==2) tail(H_hist,2)
+        else c(tail(H_hist,2), head(H_future,k-2))
+  cbind(H_t = H_future, L1 = L1, L2 = L2)
+}
+
+## --- refit like testing
+p_o   <- VARselect(Y, lag.max = 2, type=type_choice, exogen=X)$selection[["AIC(n)"]]
+fit_full  <- VAR(Y, p = 1, type = type_choice, exogen = X)
+actual_ts <- ts(glex_ts_df[,"Total_Maintenance"], start = start(glex_ts_df), frequency = 12)
+H_hist    <- as.numeric(X[,"H_t"])
+
+## --- horizon and hours path: known H_{t+1}, then carry-forward
+h <- 6
+H_tp1 <- 9 # <-- put your known next-month hours
+H_cf  <- tail(H_hist, 1)
+H_future <- H_future_seas
+
+## --- build dumvar and FORCE column match
+X_future <- build_X_future(H_hist, H_future)
+X_future <- X_future[, colnames(X), drop = FALSE]   # <- critical
+stopifnot(ncol(X_future) == ncol(X),
+          all(colnames(X_future) == colnames(X)))
+
+## --- sanity check row 1
+r1_should <- c(H_tp1, tail(H_hist,1), tail(H_hist,2)[1])
+print(rbind(used = X_future[1,], expected = r1_should))
+
+## --- forecast
+fc  <- predict(fit_full, n.ahead = h, ci = 0.95, dumvar = X_future)$fcst$log_mx
+mx_fc <- exp(fc[,"fcst"]) - 1
+mx_lo <- exp(fc[,"lower"]) - 1
+mx_hi <- exp(fc[,"upper"]) - 1
+
+#Patch 1
+# forecast on log scale
+fc_log <- predict(fit_full, n.ahead = h, ci = 0.95, dumvar = X_future)$fcst$log_mx
+mu <- fc_log[,"fcst"]
+z  <- qnorm(0.975)
+se <- (fc_log[,"upper"] - mu) / z
+## delta-method on $ scale
+slope <- exp(mu)           # derivative of exp at mu
+mx_fc <- slope - 1         # median on $ scale
+se_d  <- slope * se        # $-scale SE
+mx_lo <- pmax(0, mx_fc - z*se_d)
+mx_hi <-         mx_fc + z*se_d
+
+# #Patch 3
+# ci <- 0.95
+# z  <- qnorm(1 - (1 - ci)/2)
+# # 1) Get VAR forecast on log scale and infer log-scale SE from predict() bounds
+# fc <- predict(fit_full, n.ahead = h, ci = ci, dumvar = X_future)$fcst$log_mx
+# mu <- fc[,"fcst"]                          # E[log(MX+1)] ≈ μ
+# se <- (fc[,"upper"] - mu) / z              # σ on log scale implied by CI
+# # 2) Point forecast on $ scale = median of lognormal (avoid mean inflation)
+# # analytic slope at the point
+# slope <- exp(mu)
+# mx_fc <- slope - 1
+# # 3) Delta-method SE on $ scale: Var(exp(Y)) ≈ [exp(μ)]^2 * σ^2  ⇒  SE_$ ≈ exp(μ)*σ
+# se_d  <- slope * se   # dollar-scale SE
+# # 4) Additive CI on $ scale (truncate lower at 0). Avoids exp(z*σ) blow-up.
+# mx_lo <- pmax(0, mx_fc - z*se_d)
+# mx_hi <- mx_fc + z*se_d
+
+## --- time alignment and plot (same style as testing)
+first_fc <- time(actual_ts)[length(actual_ts)] + 1/frequency(actual_ts)
+fc_ts <- ts(mx_fc, start = c(floor(first_fc), round(12*(first_fc %% 1))+1), frequency = 12)
+lo_ts <- ts(mx_lo, start = start(fc_ts), frequency = frequency(fc_ts))
+hi_ts <- ts(mx_hi, start = start(fc_ts), frequency = frequency(fc_ts))
+
+plot(actual_ts, type="o", pch=20, col="black",
+     xlim=c(time(actual_ts)[1], time(fc_ts)[length(fc_ts)]),
+     ylab="Maintenance ($)", xlab="Time")
+lines(lo_ts, lty=3, col="gray40"); lines(hi_ts, lty=3, col="gray40")
+lines(fc_ts, type="o", pch=1, col="red")
+points(time(fc_ts)[1], mx_fc[1], pch=16, col="red")  # highlight nowcast
+legend("topleft", c("Actual","Forecast","95% CI","Nowcast (t+1)"),
+       lty=c(1,1,3,NA), pch=c(20,1,NA,16), col=c("black","red","gray40","red"), bty="n")
+
+```
+
+## Notes for decision-makers
+
+-   **When hours are trending:** We use the **change in hours** rather than the raw level. This makes short-term signals cleaner.
+-   **If we also need an hours forecast:** We run a simple hours forecast and **feed those results into the maintenance model** so both move together.
+-   **Method consistency:** Same settings as the baseline VAR. The **only change** is adding flight hours as an input.
+
+# Learjet 60
+
+::: callout-important
+## Executive summary
+
+-   **Maintenance:** steady baseline after logging; event-driven spikes; no durable seasonality.\
+-   **Flight hours:** high volatility with minimal persistence; no reliable cycle to plan around.\
+-   **Planning horizon:** 1–3 months for tactical adjustments; otherwise treat as event-driven.\
+-   **Data window:** \[May-2022 – July-2025\]. Last updated: 2025-09-09.
+:::
+
+## Analysis {.no-break}
+
+## Variable Analysis {.no-break}
+
+### Maintenance
+
+```{r}
+#A. Estimate the Trend Component
+lear60.mx = lear_ts_df[, "Total_Maintenance"]
+lear60.mx.yr=aggregate(lear60.mx,FUN=mean) #annual data
+# Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
+lear60.mx.12=ma.smooth.wge(lear60.mx,order=12,plot=FALSE)
+lear60.mx.sm12=ts(lear60.mx.12$smooth,start=c(2022,3),frequency=12)
+
+#B. Remove the Trend Component from the Data
+lear60.seas.mx=lear60.mx-lear60.mx.sm12 #Isolate Seasonality + Noise
+# end(na.omit(lear60.mx - lear60.mx.sm12)) #sanity check
+
+#C. Calculate an “Average” Within- year Seasonal Component
+lear60.seas.mx.numeric=as.numeric(na.omit(lear60.seas.mx))
+# convert to a matrix (ncol= number of years)
+# will give monthly means beginning with first non-na month
+#set month below in ts object
+lear60.seas.mx.matrix=matrix(lear60.seas.mx.numeric,nrow = 12)
+lear60.seas.mx.matrix.t=t(lear60.seas.mx.matrix)
+lear60.mx.months=colMeans(lear60.seas.mx.matrix.t, na.rm=TRUE)
+# replicates the 12 monthly means for each year (12)
+first_ok <- start(na.omit(lear60.seas.mx))
+end_ok   <- end(na.omit(lear60.seas.mx))
+len_ok   <- length(na.omit(lear60.seas.mx))
+lear60.mx.seas.means=rep(lear60.mx.months,6) 
+lear60.mx.seas.means=ts(lear60.mx.seas.means,start=first_ok,frequency=12, end = end_ok)
+
+#D. Find the Remaining Noise Component
+lear60.mx.noise=lear60.mx-lear60.mx.sm12-lear60.mx.seas.means #Noise Estimate
+
+#Plot Data
+# Data
+t_idx <- time(lear60.mx) # 1. get the fractional‐year index
+breaks_frac <- seq(min(t_idx), max(t_idx), by = 0.25) # 2. define the breaks(0.25 year)
+# 3. turn into real Dates & labels
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(lear60.mx, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (lear60)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+
+# Trend
+tmas_idx <- time(na.omit(lear60.mx.sm12))
+breaks_frac <- seq(min(tmas_idx), max(tmas_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(na.omit(lear60.mx.sm12), style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (Est. Trend)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Season
+tsm_idx <- time(na.omit(lear60.mx.seas.means))
+breaks_frac <- seq(min(tsm_idx), max(tsm_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(lear60.mx.seas.means, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (Seasonal Component)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Noise
+tnz_idx <- time(na.omit(lear60.mx.noise))
+breaks_frac <- seq(min(tnz_idx), max(tnz_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(lear60.mx.noise, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (Noise)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 8),
+                     labels = label_number(
+                       scale  = 1/1000,        # divide raw values by 1,000
+                       prefix = "$",           # put a dollar sign in front
+                       suffix = "K"            # append a “K”
+    )) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+```
+
+```{r}
+#Only returns the plot
+invisible(
+    capture.output(
+        plotts.sample.wge(lear_ts_df[,"Total_Maintenance"]),
+        file = NULL
+    )
+)
+
+#Only returns the plot
+invisible(
+    capture.output(
+        plotts.sample.wge(log(lear_ts_df[,"Total_Maintenance"]+1)),
+        file = NULL
+    )
+)
+```
+
+| Trend           | Seasonality/Cycle | Near-term persistence |
+|-----------------|-------------------|-----------------------|
+| flat (post-log) | none              | no                    |
+
+#### Interpretation of Sample Autocorrelations & Spectral Density
+
+Monthly maintenance costs vary month-to-month within a narrow band after logging; large spikes are rare and isolated.
+
+[**Realization (Logged Data):**]{.underline}\
+Maintenance costs fluctuate month-to-month within a relatively narrow and stable range after log transformation. This indicates that routine maintenance expenses are generally steady, apart from occasional large, isolated events.
+
+[**Autocorrelations (middle plot):**]{.underline}\
+Minimal correlation is observed month-to-month, suggesting maintenance costs in any given month do not significantly predict future costs. Historical spending patterns provide limited forecasting value.
+
+**Takeaway:** past months add little predictive value; budget and staffing should not assume carryover effects.
+
+[**Spectral Density:**]{.underline}\
+No consistent cyclicality or seasonal rhythms detected. The spectral analysis confirms that costs are driven primarily by irregular or isolated maintenance events rather than periodic patterns.
+
+**Takeaway:** treat Lear 60 maintenance as event‑driven; plan for variance, not seasonality.
+
+[**Why Log Transformation?**]{.underline}\
+The original data showed significant spikes due to a few extreme cost events. By applying a log transformation, we minimized the impact of these outliers, which improved our ability to see regular cost patterns and increased the reliability of our analysis
+
+### Flight Hours {.break}
+
+```{r}
+lear60.fhrs = lear_ts_df[, "total_flight_hours"]
+#A. Estimate the Trend Component
+lear60.fhrs.yr=aggregate(lear60.fhrs,FUN=mean) #annual data
+# Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
+lear60.fhrs.6=ma.smooth.wge(lear60.fhrs,order=12,plot=FALSE)
+lear60.fhrs.sm6=ts(lear60.fhrs.6$smooth,start=c(2022,5),frequency=12)
+
+#B. Remove the Trend Component from the Data
+lear60.seas.fhrs=lear60.fhrs-lear60.fhrs.sm6 #Isolate Seasonality + Noise
+# end(na.omit(lear60.fhrs - lear60.fhrs.sm6)) #sanity check
+
+#C. Calculate an “Average” Within- year Seasonal Component
+lear60.seas.fhrs.numeric=as.numeric(na.omit(lear60.seas.fhrs))
+# convert to a matrix (ncol= number of years)
+# will give monthly means beginning with first non-na month
+#ncol = years, nrow = months
+lear60.seas.fhrs.matrix=matrix(lear60.seas.fhrs.numeric,nrow = 12)
+lear60.seas.fhrs.matrix.t=t(lear60.seas.fhrs.matrix)
+lear60.fhrs.months=colMeans(lear60.seas.fhrs.matrix.t, na.rm=TRUE)
+# replicates the 12 monthly means for each year (5)
+first_ok <- start(na.omit(lear60.seas.fhrs))
+end_ok   <- end(na.omit(lear60.seas.fhrs))
+len_ok   <- length(na.omit(lear60.seas.fhrs))
+lear60.fhrs.seas.means=rep(lear60.fhrs.months,6) 
+lear60.fhrs.seas.means=ts(lear60.fhrs.seas.means,start=first_ok,frequency=12,end = end_ok)
+
+#D. Find the Remaining Noise Component
+lear60.fhrs.noise=lear60.fhrs-lear60.fhrs.sm6-lear60.fhrs.seas.means #Noise Estimate
+
+#Plot Data
+# Data
+t_idx <- time(lear60.fhrs) # 1. get the fractional‐year index
+breaks_frac <- seq(min(t_idx), max(t_idx), by = 0.25) # 2. define the breaks(0.25 year)
+# 3. turn into real Dates & labels
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(lear60.fhrs, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (lear60)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+
+# Trend
+tmas_idx <- time(na.omit(lear60.fhrs.sm6))
+breaks_frac <- seq(min(tmas_idx), max(tmas_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(na.omit(lear60.fhrs.sm6), style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (Est. Trend)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Season
+tsm_idx <- time(na.omit(lear60.fhrs.seas.means))
+breaks_frac <- seq(min(tsm_idx), max(tsm_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(lear60.fhrs.seas.means, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (Seasonal Component)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+# Noise
+tnz_idx <- time(na.omit(lear60.fhrs.noise))
+breaks_frac <- seq(min(tnz_idx), max(tnz_idx), by = 0.25)
+breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
+labels_date  <- format(breaks_date, "%b %Y")
+plotts.wge(lear60.fhrs.noise, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (Noise)") +
+  scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
+  scale_x_continuous(breaks = breaks_frac, 
+                     labels = labels_date) + theme(axis.text.x = element_text(
+                       angle = 90, vjust = 0.5, size = 8))
+```
+
+```{r}
+#Only returns the plot
+invisible(
+    capture.output(
+        plotts.sample.wge(lear_ts_df[,"total_flight_hours"]),
+        file = NULL
+    )
+)
+```
+
+| Trend | Seasonality/Cycle | Near-term persistence |
+|-------|-------------------|-----------------------|
+| ↑     | present (2–3 mo)  | yes                   |
+
+#### Interpretation of Sample Autocorrelations & Spectral Density
+
+Monthly costs show short‑term reversals and a recurring cycle about every 4 months, matching the ACF and spectrum.
+
+[**Realization:**]{.underline}\
+Flight hours display a clear upward trend over the observed period, combined with notable short-term fluctuations. There's a recurring pattern of increased activity every 2–3 months.
+
+[**Autocorrelations (middle plot):**]{.underline}\
+Flight hours show strong month-to-month persistence, especially from one month to the next, with noticeable predictability lasting up to roughly 10 months. Recent flight activity can provide valuable insight for forecasting several months
+
+**Takeaway:** short-horizon signal only; use 1–4 month planning windows.
+
+[**Spectral Density:**]{.underline}\
+Analysis confirms a dominant short-term operating rhythm around every two to three months. Apart from this short cycle, no significant annual or longer-term seasonal patterns are evident. The overall upward trend also strongly influences the spectral profile.
+
+**Takeaway:** expect a 2–3 month operating rhythm; schedule crews and maintenance windows accordingly without assuming fixed annual seasonality.
+
+[**Implications for planning**]{.underline}\
+Forecasting efforts should prioritize capturing short-term momentum (recent activity trends) and the observed 2–3 month operational rhythm. Long-term planning will benefit from anticipating general growth, but there is limited value in assuming consistent seasonal fluctuations.
+
+### Variable Comparison
+
+#### MX & Flight Hours
+
+```{r}
+# 1) Combine Data to Dataframe
+df <- data.frame(
+  Date        = as.Date(as.yearmon(time(lear60.mx))),
+  Maintenance = as.numeric(lear60.mx),
+  FlightHours = as.numeric(lear60.fhrs)
+)
+
+# 2) Compute a scale factor so FlightHours*factor ≈ Maintenance range
+ratio <- max(abs(df$Maintenance), na.rm=TRUE) / 
+         max(abs(df$FlightHours), na.rm=TRUE)
+
+# 3) Plot with left axis = Maintenance, right axis = FlightHours
+ggplot(df, aes(x=Date)) +
+  geom_bar(aes(y = Maintenance,color = "Maintenance"),
+           stat="identity",alpha = 0.55) +
+  geom_line(aes(y = FlightHours*ratio,color = "Flight Hours"),size = 1) +
+  scale_y_continuous(
+    name    = "MX Costs",
+    labels  = label_number(scale=1/1000, prefix="$", suffix="K"),
+    sec.axis = sec_axis(~./ratio, name="Flight Hours")
+  ) +
+  scale_color_manual(
+    name   = NULL,
+    values = c("Maintenance"="steelblue", "Flight Hours"="firebrick")
+  ) +
+  scale_x_date(
+    breaks      = seq(min(df$Date), max(df$Date), by = "3 months"),
+    date_labels = "%b %Y",
+    expand      = c(0,0)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x    = element_text(angle = 90, vjust = 0.5, size = 8),
+    legend.position = "bottom"
+  ) +
+  ggtitle("MX Costs vs Flight Hours")
+```
+
+#### Seasonality
+
+```{r}
+# full‐length maintenance
+mx_ts    <- lear60.mx
+df_full  <- data.frame(
+  Date        = as.Date(as.yearmon(time(mx_ts))),
+  Maintenance = as.numeric(mx_ts)
+)
+
+# seasonal maintenance (shorter)
+seas_ts   <- lear60.mx.seas.means
+df_seas  <- data.frame(
+  Date                  = as.Date(as.yearmon(time(seas_ts))),
+  Maintenance_Seasonal  = as.numeric(seas_ts)
+)
+
+#ratio 
+ratio <- max(abs(df_full$Maintenance), na.rm=TRUE) / 
+         max(abs(df_seas$Maintenance_Seasonal), na.rm=TRUE)
+
+
+ggplot() +
+  geom_line(
+    data = df_full,
+    aes(x = Date, y = Maintenance),
+    color = "steelblue",
+    size  = 0.8
+  ) +
+  geom_line(
+    data = df_seas,
+    aes(x = Date, y = Maintenance_Seasonal),
+    color     = "firebrick",
+    size      = 0.8,
+    linetype  = "dashed"
+  ) + 
+  scale_y_continuous(
+    name    = "MX Costs",
+    labels  = label_number(scale=1/1000, prefix="$", suffix="K")
+  ) +
+  scale_x_date(
+    breaks      = seq(min(df_full$Date), max(df_full$Date), by = "3 months"),
+    date_labels = "%b %Y",
+    expand      = c(0,0)
+  ) +
+  labs(
+    title = "Original vs. Seasonal Maintenance",
+    x     = "Date",
+    y     = "Maintenance Cost"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x     = element_text(angle = 90, vjust = 0.5),
+    legend.position = "none"
+  )
+```
+
+```{r}
+# 1) Your two seasonal series, with Date index
+mx_seas <- lear60.mx.seas.means
+fh_seas <- lear60.fhrs.seas.means 
+dates   <- as.Date(as.yearmon(time(mx_seas)))
+
+df <- data.frame(
+  Date        = dates,
+  Maintenance = as.numeric(mx_seas),
+  FlightHours = as.numeric(fh_seas)
+)
+
+# 2) Compute a scale factor so FlightHours*factor ≈ Maintenance range
+ratio <- max(abs(df$Maintenance), na.rm=TRUE) / 
+         max(abs(df$FlightHours), na.rm=TRUE)
+
+# 3) Plot with left axis = Maintenance, right axis = FlightHours
+ggplot(df, aes(x=Date)) +
+  geom_line(aes(y = Maintenance,color = "Maintenance"),size = 1) +
+  geom_line(aes(y = FlightHours*ratio,color = "Flight Hours"),size = 1) +
+  scale_y_continuous(
+    name    = "MX seasonal effect",
+    labels  = label_number(scale=1/1000, prefix="$", suffix="K"),
+    sec.axis = sec_axis(~./ratio, name="Flight Hours")
+  ) +
+  scale_color_manual(
+    name   = NULL,
+    values = c("Maintenance"="steelblue", "Flight Hours"="firebrick")
+  ) +
+  scale_x_date(
+    breaks      = seq(min(df$Date), max(df$Date), by = "3 months"),
+    date_labels = "%b %Y",
+    expand      = c(0,0)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x    = element_text(angle = 90, vjust = 0.5, size = 8),
+    legend.position = "bottom"
+  ) +
+  ggtitle("MX Costs vs Flight Hours (Seasonal)")
+
+```
+
+## Vector Autoregression (VAR) Analysis
+
+### Model Selection
+
+```{r}
+# ── 0. Setup ─────────────────────────────────────────────────────────────
+log_mx <- log(lear_ts_df[,"Total_Maintenance"] + 1) 
+hrs    <- lear_ts_df[,"total_flight_hours"]
+Y      <- cbind(log_mx, hrs)
+ccf(log_mx, lear_ts_df[,"total_flight_hours"])
+
+# ── 1. Stationarise each series ─────────────────────────────────────────
+#Run KPSS on each (type = "mu" tests for stationarity around a mean)
+kpss_raw  <- ur.kpss(lear_ts_df[,"Total_Maintenance"], type = "mu", lags = "short")
+kpss_log  <- ur.kpss(log_mx, type = "mu", lags = "short")
+kpss_hrs  <- ur.kpss(hrs,    type = "mu", lags = "short")
+print(paste0("The Raw MX Data is: ",if(kpss_raw@teststat > kpss_raw@cval[2]) "Non-Stationary" else "Stationary ", "(0.05 confidence level)"))
+print(paste0("The Logged MX Data is: ",if(kpss_log@teststat > kpss_log@cval[2]) "Non-Stationary" else "Stationary ", "(0.05 confidence level)"))
+print(paste0("The Flight Hour Data is: ",if(kpss_hrs@teststat > kpss_hrs@cval[2]) "Non-Stationary" else "Stationary ", "(0.05 confidence level)"))
+
+is_stationary <- function(x) {
+  kpss <- ur.kpss(x, type = "mu", lags = "short")
+  kpss@teststat < kpss@cval[2]
+}
+Y_stable <- apply(Y, dim(Y)[2], function(x) if (is_stationary(x)) x else diff(x))
+Y_stable <- apply(Y, 2, function(x) if (is_stationary(x)) x else diff(x))
+m <- min(lengths(Y_stable))
+Y_stable <- do.call(cbind, lapply(Y_stable, function(x) tail(x, m)))
+#one period after Y’s first observation
+Y_stable <- ts(Y_stable, start = time(Y)[2], frequency = frequency(Y))
+# ── 2. Trend test (WBG) ─────────────────────────────────────────────────
+seas <- 12
+needs_trend <- function(x) {
+  # 1) drop any NAs
+  x_clean <- na.omit(as.numeric(x))
+  # 2) if you’ve lost too many points, bail out
+  if(length(x_clean) < seas) return(FALSE)
+  wbg <- wbg.boot.wge(x_clean, pvalue = TRUE)
+  wbg$pv < 0.05
+}
+trend_flags   <- apply(Y_stable, 2, needs_trend)
+include_trend <- any(trend_flags)
+include_const <- any(colMeans(Y, na.rm = TRUE) != 0)
+
+type_choice <- if (include_trend & include_const) {"both"
+  } else if (include_trend) {"trend"
+  } else if (include_const) {"const"
+  } else {"none"}
+
+# ── 3. Lag-order selection ──────────────────────────────────────────────
+ic   <- VARselect(Y_stable, lag.max = 6, type = type_choice)
+ic
+popt <- ic$selection["AIC(n)"]          # or majority vote
+popt
+# ── 4. Fit VAR and diagnose ─────────────────────────────────────────────
+fit  <- VAR(Y_stable, p = popt , type = type_choice) #using 4 based on sample plots and CCF
+
+# Ljung-Box (white-noise check) – repeat per equation if >1 series
+ljung.wge(resid(fit)[,1], p = popt, K = 12)$pval
+ljung.wge(resid(fit)[,1], p = popt, K = 24)$pval
+```
+
+### Testing {.break}
+
+```{r}
+# ── 5. Forecast 12 months ahead & evaluate ──────────────────────────────
+split_pt      <- end(na.omit(lear60.seas.fhrs))                  # Apr-2024 cutoff
+st_pt         <- c(split_pt[1] - 1, split_pt[2])
+train_idx     <- window(lear_ts_df, end = split_pt)
+test_idx      <- window(lear_ts_df, start = st_pt)
+
+log_mx_tr     <- log(train_idx[,"Total_Maintenance"] + 1)
+hrs_tr        <- train_idx[,"total_flight_hours"]
+Y_tr_stable  <- window(Y_stable, end = split_pt)
+
+var_mod       <- VAR(cbind(log_mx_tr, hrs_tr),
+                     p = popt, type = type_choice)
+var_mod   <- VAR(as.matrix(Y_tr_stable), p = popt, type = type_choice)
+
+fcast         <- predict(var_mod, n.ahead = 6)$fcst$log_mx[,1]
+rmse_log      <- sqrt(mean((tail(log_mx,6) - fcast)^2))
+rmse_log
+# back-transform
+mx_hat        <- exp(fcast) - 1
+rmse_raw      <- sqrt(mean((test_idx[,"Total_Maintenance"] - mx_hat)^2))
+rmse_raw
+
+# ── 6. Plot actual vs. forecast ─────────────────────────────────────────
+times     <- as.numeric(time(lear_ts_df))
+test_t    <- tail(times,6)
+
+# forecasts
+plot(times, lear_ts_df[,"Total_Maintenance"], type = "o", pch = 20,
+     ylab = "Maintenance ($)", xlab = "Time")
+points(test_t, mx_hat, type = "o", pch = 1, col = 2)
+legend("topleft", legend = c("Actual", "Forecast"), pch = c(20,1), col = c(1,2))
+```
+
+[^2]
+
+[^2]: Monthly data; last 6 months held out for testing; forecasts shown in original units after any transformations.
+
+### Deployment {.break}
+
+*Forecasts are most reliable inside 1–3 months; uncertainty widens beyond that.*
+
+```{r}
+Y_full   <- cbind(
+  log_mx = log(lear_ts_df[,"Total_Maintenance"] + 1),
+  hrs    = lear_ts_df[,"total_flight_hours"]
+)
+var_full <- VAR(Y_full, p = popt, type = type_choice)
+fc_full  <- predict(var_full, n.ahead = 6)$fcst
+
+# 8) Extract and back-transform maintenance forecasts
+log_fc       <- fc_full$log_mx[,"fcst"]
+
+
+# 1) Back‐transform your log‐forecast
+mx_fc <- exp(log_fc) - 1
+
+# 2) Turn both into ts objects with monthly frequency
+actual_ts   <- ts(lear_ts_df[,"Total_Maintenance"], start = start(lear_ts_df), 
+                  frequency = 12)
+
+# The forecast starts the month after the last observation:
+last_time   <- time(actual_ts)[length(actual_ts)]
+# Compute year + fraction for the first forecast
+first_fc    <- last_time + 1/12
+
+forecast_ts <- ts(mx_fc, 
+                  start = c(floor(first_fc), round(12 * (first_fc %% 1)) + 1),
+                  frequency = 12)
+
+# 3) Plot actual & forecast together
+plot(actual_ts, type  = "o", pch   = 20, col   = "black",
+     xlim  = c(time(actual_ts)[1],
+               time(forecast_ts)[length(forecast_ts)]),
+     ylab  = "Maintenance ($)", xlab  = "Time")
+lines(forecast_ts, type = "o", pch  = 1, col  = "red")
+legend("topleft", legend = c("Actual","Forecast"), pch = c(20,1), 
+       col = c("black","red")
+)
+```
+
+## VARX: Nowcasting Maintenance with Known Same‑Month Flight Hours
+
+### Preface
+
+We receive flight hours for month t about two weeks before maintenance costs for month t are finalized. A standard VAR uses only past values and cannot use those known same-month hours. VARX solves this by keeping **maintenance** as the modeled series and adding **flight hours** (current month plus optional lags) as external inputs. This lets us publish a maintenance nowcast for month t as soon as hours for t are available and uses the 0–2 week information lead on hours.
+
+**Why show VARX next to the baseline VAR** - **VAR:** joint model using lags only. Use when current hours are not yet known. - **VARX:** adds known current hours H_t (and recent lags if helpful). Use when hours arrive first and you need a same-month maintenance nowcast.
+
+**Process** This mirrors the baseline VAR workflow with one change: hours are added as external inputs. Stability checks, constant or trend selection, lag order p, diagnostics, backtesting, and deployment remain the same.
+
+------------------------------------------------------------------------
+
+### VARX Model Selection (hours as exogenous)
+
+#### Parts & Labor as Additional Endogenous Variables
+
+Because VAR works with at least 2 endogenous variables, and because we are turning Flight Hours into a exogenous variables for the purpose of maintaining more realistic modeling expectations of the flow and delivery sequences of the data, we will include two additional variables in additional to Total Maintenance. These are Parts & Labor, which are sub-costs of Total Maintenance. In addition to improving the functionality of the model, these variables may also prove to explain additional makeup of the analyses and forecasts.
+
+
+```{r}
+# # ── 0) Setup ────────────────────────────────────────────────────────────
+df <- mx %>% left_join(fhrs, by = c("Month","Aircraft")) %>% select(c("Aircraft","Month", "Total_Maintenance", "Parts", "Labor", "total_flight_hours"))
+lear_df <- df %>% filter(Aircraft == "Learjet60") %>% select(-Aircraft)
+
+#extract the numeric data
+mat <- as.matrix(lear_df %>% select(-Month)) #GLOBAL
+#build ts object (April 2021 → start = c(2021,4))
+lear_ts_df <- ts(mat,start = c(2022, 5), frequency = 12)
+
+# --- Endogenous Variables ---
+log_mx    <- log(lear_ts_df[,"Total_Maintenance"] + 1)
+log_parts <- log(lear_ts_df[,"Parts"] + 1)
+log_labor <- log(lear_ts_df[,"Labor"] + 1)
+Y_raw <- cbind(log_mx, log_parts,log_labor)
+colnames(Y_raw) <- c("log_mx","log_parts","log_labor")
+
+# Endogenous target (what we forecast):
+# Use levels if stationary; otherwise difference. (Your KPSS has typically found log_mx stationary.)
+is_stationary <- function(x) { k <- ur.kpss(x, type = "mu", lags = "short"); k@teststat < k@cval[2] }
+Y_endog <- lapply(1:ncol(Y_raw), function(j){
+  x <- as.numeric(Y_raw[,j])
+  if (is_stationary(x)) x else c(NA, diff(x))
+  })
+names(Y_endog) <- colnames(Y_raw)
+Y_endog
+
+# --- Exogenous hours in levels with lags by slicing (keeps tail) ---
+hrs    <- lear_ts_df[,"total_flight_hours"]
+# Exogenous block: contemporaneous hours and 1–2 lags (adjust as needed).
+# If prefer stationarity in X, replace hrs with diff(hrs) below.
+X_exog <- cbind(H_t = hrs, 
+                L1  = c(NA, head(hrs, -1)), 
+                L2  = c(NA, NA, head(hrs, -2)))
+
+# --- VAR-style alignment: keep the last m rows across Y and X ---
+m <- min(c(sapply(Y_endog, length), sapply(X_exog, length)))
+Y_stable <- do.call(cbind, lapply(Y_endog, function(x) tail(x, m)))
+X_stable <- do.call(cbind, lapply(X_exog, function(x) tail(x, m)))
+# Drop a common number of leading rows until no NA remains (lags created head NAs)
+nlead <- function(v){ i <- which(!is.na(v))[1]; if (is.na(i)) length(v) else i-1 }
+drop  <- max(apply(cbind(Y_stable, X_stable), 2, nlead), na.rm=TRUE)
+Y <- Y_stable[(drop+1):nrow(Y_stable), , drop=FALSE]
+X <- X_stable[(drop+1):nrow(X_stable), , drop=FALSE]
+# ts metadata
+start_time <- time(lear_ts_df)[nrow(lear_ts_df) - nrow(Y) + 1]
+Y <- ts(Y, start=start_time, frequency=frequency(lear_ts_df))
+X <- ts(X, start=start_time, frequency=frequency(lear_ts_df))
+
+
+# ── 1) Deterministic term via WBG on the modeled series ────────────────
+needs_trend <- function(x) { x0 <- na.omit(as.numeric(x)); if (length(x0) < 12) return(FALSE); wbg.boot.wge(x0, pvalue = TRUE)$pv < 0.05 }
+include_trend <-apply(Y, 2, needs_trend)
+include_const <- any(colMeans(Y, na.rm=TRUE) != 0)
+type_choice <- if (any(include_trend) && include_const) "both" else
+               if (any(include_trend)) "trend" else
+               if (any(include_const)) "const" else "none"
+
+# ── 2) Lag‑order selection with exogenous regressors ───────────────────
+ic   <- VARselect(Y, lag.max = 6, type = type_choice, exogen = X)
+popt <- ic$selection[["AIC(n)"]]
+
+# ── 3) Fit VARX (endogenous = maintenance; exogenous = hours & lags) ───
+fit_varx <- VAR(Y, p=popt, type=type_choice, exogen=X)
+
+# ── 4) Residual diagnostics ────────────────────────────────────────────
+# Per‑equation Ljung–Box on maintenance residuals
+lb12 <- apply(resid(fit_varx), 2, function(e) ljung.wge(e, p = popt, K = 12)$pval)
+lb24 <- apply(resid(fit_varx), 2, function(e) ljung.wge(e, p = popt, K = 24)$pval)
+```
+
+### VARX Backtest on a Split (uses realized hours as exogenous path)
+
+When hours for month t are known, build `X_future` with H_t and its lags ($\H_{t−1}, H_{t−2}$).
+
+```{r}
+# ===== TESTING (hold out last h; realized hours path) =====
+h   <- 6
+Tn  <- nrow(Y)
+Y_tr <- Y[1:(Tn-h), , drop=FALSE];  X_tr <- X[1:(Tn-h), , drop=FALSE]
+Y_te <- Y[(Tn-h+1):Tn, , drop=FALSE]; X_te <- X[(Tn-h+1):Tn, , drop=FALSE]
+
+# reselection on train (same as VAR)
+ic_tr <- VARselect(Y_tr, lag.max = 3, type = type_choice, exogen = X_tr)
+p_tr  <- ic_tr$selection[["AIC(n)"]]
+
+fit_tr <- VAR(Y_tr, p = p_tr, type = type_choice, exogen = X_tr, lag.max = 3)
+
+# forecast the holdout using realized exogenous path
+pred_te <- predict(fit_tr, n.ahead = h, ci = 0.95, dumvar = X_te)$fcst
+
+# back-transform MX (equal-tailed bands; swap to delta-method if needed)
+log_fc <- pred_te$log_mx[,"fcst"]
+mx_hat <- exp(log_fc) - 1
+
+# testing metrics and plot (same style as your VAR)
+actual_ts <- ts(lear_ts_df[,"Total_Maintenance"], start=start(lear_ts_df), frequency=12)
+mx_obs    <- tail(actual_ts, h)
+rmse_raw  <- sqrt(mean((as.numeric(mx_obs) - mx_hat)^2, na.rm=TRUE))
+
+# align forecasts to holdout timestamps, then plot
+first_test_time <- time(actual_ts)[length(actual_ts) - h + 1]
+fc_ts <- ts(mx_hat, start = first_test_time, frequency = frequency(actual_ts))
+
+plot(actual_ts, type="o", pch=20, ylab="Maintenance ($)", xlab="Time")
+lines(fc_ts,  type="o", pch=1, col=2)
+legend("topleft", c("Actual","Forecast"), pch=c(20,1), col=c(1,2), bty="n")
+
+# metrics
+rmse_raw <- sqrt(mean((as.numeric(mx_obs) - as.numeric(fc_ts))^2, na.rm=TRUE))
+nowcast_err_abs <- abs(as.numeric(mx_obs)[1] - as.numeric(fc_ts)[1])
+nowcast_err_pct <- nowcast_err_abs / max(1, as.numeric(mx_obs)[1])
+```
+
+```{r}
+## ===== VARX TESTING: rolling-origin =====
+# Pre-req: Y (log_mx, log_parts, log_labor), X (H_t,L1,L2), type_choice set.
+
+h   <- 6
+Tn  <- nrow(Y)
+idx0 <- Tn - h
+actual_ts <- ts(lear_ts_df[,"Total_Maintenance"], start=start(lear_ts_df), frequency=12)
+times <- time(actual_ts)
+
+# helper: build dumvar from realized hours
+build_X_future <- function(H_hist, H_future) {
+  k  <- length(H_future)
+  L1 <- if (k==1) tail(H_hist,1) else c(tail(H_hist,1), head(H_future, k-1))
+  L2 <- if (k==1) tail(H_hist,2)[1] else if (k==2) tail(H_hist,2) else c(tail(H_hist,2), head(H_future, k-2))
+  cbind(H_t = H_future, L1 = L1, L2 = L2)
+}
+
+# containers for h=1 nowcasts
+now_fc  <- numeric(h)
+now_obs <- as.numeric(tail(actual_ts, h))
+p_used  <- integer(h)
+starts  <- numeric(h)           # <-- add
+paths   <- vector("list", h)    # <-- add
+
+for (i in 1:h) {
+  t_end <- idx0 + (i - 1)
+  Y_tr  <- Y[1:t_end,,drop=FALSE];  X_tr <- X[1:t_end,,drop=FALSE]
+  p_o   <- VARselect(Y_tr, lag.max=3, type=type_choice, exogen=X_tr)$selection[["AIC(n)"]]
+  fit_o <- VAR(Y_tr, p=p_o, type=type_choice, exogen=X_tr, lag.max = 3)
+
+  k <- h - (i - 1)
+  H_hist <- as.numeric(X_tr[,"H_t"])
+  H_fut  <- as.numeric(X[(t_end+1):(t_end+k),"H_t"])
+  X_fut  <- build_X_future(H_hist, H_future = H_fut)
+
+  fc   <- predict(fit_o, n.ahead=k, ci=0.95, dumvar=X_fut)$fcst$log_mx
+  path <- expm1(fc[,"fcst"])                   # dollars
+  starts[i] <- time(actual_ts)[length(actual_ts) - h + i]
+  paths[[i]] <- path
+  now_fc[i]  <- path[1]                        # h=1 nowcast at this origin
+}
+
+# --- Plot A: actuals + nowcast dots ---
+par(mfrow=c(1,2), mar=c(4,4,2,1))
+plot(actual_ts, type="o", pch=20, ylab="Maintenance ($)", xlab="Time", main="A: Nowcast (h=1)")
+now_ts <- ts(now_fc, start=starts[1], frequency=frequency(actual_ts))
+points(now_ts, type="p", pch=1, col="red")
+legend("topleft", c("Actual","Nowcast (h=1)"), pch=c(20,1), col=c("black","red"), bty="n")
+
+# --- Plot B: rolling multi-step, colored by origin ---
+plot(actual_ts, type="l", ylab="Maintenance ($)", xlab="Time", main="B: Rolling multi-step")
+cols <- colorRampPalette(c("#d73027","#fc8d59","#fee08b","#91bfdb","#4575b4","#542788"))(h)
+for (i in 1:h) {
+  path_ts <- ts(paths[[i]], start=starts[i], frequency=frequency(actual_ts))
+  lines(path_ts, col=cols[i])
+  points(time(path_ts), as.numeric(path_ts), pch=1, col=cols[i])
+}
+par(mfrow=c(1,1))
+
+### DATA LEAKAGE AUDIT ###
+audit <- lapply(1:h, function(i){
+  t_end  <- idx0 + (i-1)
+  fc_idx <- t_end + 1
+  H_hist <- as.numeric(X[1:t_end,"H_t"])
+  H_tp1  <- as.numeric(X[fc_idx,"H_t"])
+  X_now  <- build_X_future(H_hist, H_future = c(H_tp1))
+  data.frame(
+    origin = i,
+    train_end_time = as.character(time(actual_ts)[fc_idx-1]),
+    fc_start_time  = as.character(time(actual_ts)[fc_idx]),
+    H_tp1_from_X   = H_tp1,
+    H_t_used       = X_now[,"H_t"],
+    L1_used        = X_now[,"L1"],
+    L1_should_be   = tail(H_hist,1),
+    L2_used        = X_now[,"L2"],
+    L2_should_be   = tail(H_hist,2)[1]
+  )
+})
+# do.call(rbind, audit)
+```
+
+### Deployment (full re‑fit) and multi‑step forecasts
+
+For horizons \>1, you must provide an **exogenous path** for hours: - **Nowcast** (h=1): use known H_t and known lags. - **Short‑term forecast** (h\>1): provide hour scenarios or forecast hours in a separate model and pass them via `dumvar`.
+
+#### Flight Hours
+
+In order to get a more accurate forecast, estimating flight hours via means, seasonality, and/or AR modeling will further improve the accuracy of the VARX model where Flight Hours is an endogenous variable
+
+```{r}
+h     <- 6
+H_tp1 <- 15                    # known next-month hours
+H_hist <- as.numeric(X[,"H_t"])
+
+# 1) Carry-forward (baseline)
+H_future_cf   <- c(H_tp1, rep(tail(H_hist,1), h-1))
+
+# 2) Rolling means
+H_future_ma3  <- c(H_tp1, rep(mean(tail(H_hist, 3)),  h-1))
+H_future_ma6  <- c(H_tp1, rep(mean(tail(H_hist, 6)),  h-1))
+H_future_ma12 <- c(H_tp1, rep(mean(tail(H_hist,12)),  h-1))
+
+# 3) Seasonal medians by calendar month
+cyc     <- cycle(ts(H_hist, frequency=12))
+mon_med <- tapply(H_hist, cyc, median, na.rm=TRUE)
+last_m  <- cyc[length(cyc)]
+mons    <- ((last_m+1):(last_m+h)) %% 12; mons[mons==0] <- 12
+H_future_seas <- c(mon_med[mons[1:h]])
+
+# 4) AR forecast for hours (base R)
+ar_fit  <- ar(ts(H_hist, frequency=12), aic=TRUE)
+H_future_ar <- c(H_tp1, as.numeric(predict(ar_fit, n.ahead=h)$pred))
+
+```
+
+```{r}
+## --- helper
+build_X_future <- function(H_hist, H_future){
+  k  <- length(H_future)
+  L1 <- if (k==1) tail(H_hist,1) else c(tail(H_hist,1), head(H_future,k-1))
+  L2 <- if (k==1) tail(H_hist,2)[1] else if (k==2) tail(H_hist,2)
+        else c(tail(H_hist,2), head(H_future,k-2))
+  cbind(H_t = H_future, L1 = L1, L2 = L2)
+}
+
+## --- refit like testing
+p_o   <- VARselect(Y, lag.max=3, type=type_choice, exogen=X)$selection[["AIC(n)"]]
+fit_full  <- VAR(Y, p = p_o, type = type_choice, exogen = X, lag.max = 3)
+actual_ts <- ts(lear_ts_df[,"Total_Maintenance"], start = start(lear_ts_df), frequency = 12)
+H_hist    <- as.numeric(X[,"H_t"])
+
+## --- horizon and hours path: known H_{t+1}, then carry-forward
+h <- 6
+H_tp1 <- 9 # <-- put your known next-month hours
+H_cf  <- tail(H_hist, 1)
+H_future <- H_future_seas
+
+## --- build dumvar and FORCE column match
+X_future <- build_X_future(H_hist, H_future)
+X_future <- X_future[, colnames(X), drop = FALSE]   # <- critical
+stopifnot(ncol(X_future) == ncol(X),
+          all(colnames(X_future) == colnames(X)))
+
+## --- sanity check row 1
+r1_should <- c(H_tp1, tail(H_hist,1), tail(H_hist,2)[1])
+print(rbind(used = X_future[1,], expected = r1_should))
+
+## --- forecast
+fc  <- predict(fit_full, n.ahead = h, ci = 0.95, dumvar = X_future)$fcst$log_mx
+mx_fc <- exp(fc[,"fcst"]) - 1
+mx_lo <- exp(fc[,"lower"]) - 1
+mx_hi <- exp(fc[,"upper"]) - 1
+
+#Patch 1
+# forecast on log scale
+fc_log <- predict(fit_full, n.ahead = h, ci = 0.95, dumvar = X_future)$fcst$log_mx
+mu <- fc_log[,"fcst"]
+z  <- qnorm(0.975)
+se <- (fc_log[,"upper"] - mu) / z
+## delta-method on $ scale
+slope <- exp(mu)           # derivative of exp at mu
+mx_fc <- slope - 1         # median on $ scale
+se_d  <- slope * se        # $-scale SE
+mx_lo <- pmax(0, mx_fc - z*se_d)
+mx_hi <-         mx_fc + z*se_d
+
+# #Patch 3
+# ci <- 0.95
+# z  <- qnorm(1 - (1 - ci)/2)
+# # 1) Get VAR forecast on log scale and infer log-scale SE from predict() bounds
+# fc <- predict(fit_full, n.ahead = h, ci = ci, dumvar = X_future)$fcst$log_mx
+# mu <- fc[,"fcst"]                          # E[log(MX+1)] ≈ μ
+# se <- (fc[,"upper"] - mu) / z              # σ on log scale implied by CI
+# # 2) Point forecast on $ scale = median of lognormal (avoid mean inflation)
+# # analytic slope at the point
+# slope <- exp(mu)
+# mx_fc <- slope - 1
+# # 3) Delta-method SE on $ scale: Var(exp(Y)) ≈ [exp(μ)]^2 * σ^2  ⇒  SE_$ ≈ exp(μ)*σ
+# se_d  <- slope * se   # dollar-scale SE
+# # 4) Additive CI on $ scale (truncate lower at 0). Avoids exp(z*σ) blow-up.
+# mx_lo <- pmax(0, mx_fc - z*se_d)
+# mx_hi <- mx_fc + z*se_d
+
+## --- time alignment and plot (same style as testing)
+first_fc <- time(actual_ts)[length(actual_ts)] + 1/frequency(actual_ts)
+fc_ts <- ts(mx_fc, start = c(floor(first_fc), round(12*(first_fc %% 1))+1), frequency = 12)
+lo_ts <- ts(mx_lo, start = start(fc_ts), frequency = frequency(fc_ts))
+hi_ts <- ts(mx_hi, start = start(fc_ts), frequency = frequency(fc_ts))
+
+plot(actual_ts, type="o", pch=20, col="black",
+     xlim=c(time(actual_ts)[1], time(fc_ts)[length(fc_ts)]),
+     ylab="Maintenance ($)", xlab="Time")
+lines(lo_ts, lty=3, col="gray40"); lines(hi_ts, lty=3, col="gray40")
+lines(fc_ts, type="o", pch=1, col="red")
+points(time(fc_ts)[1], mx_fc[1], pch=16, col="red")  # highlight nowcast
+legend("topleft", c("Actual","Forecast","95% CI","Nowcast (t+1)"),
+       lty=c(1,1,3,NA), pch=c(20,1,NA,16), col=c("black","red","gray40","red"), bty="n")
+
+```
+
+## Notes for decision-makers
+
+-   **When hours are trending:** We use the **change in hours** rather than the raw level. This makes short-term signals cleaner.
+-   **If we also need an hours forecast:** We run a simple hours forecast and **feed those results into the maintenance model** so both move together.
+-   **Method consistency:** Same settings as the baseline VAR. The **only change** is adding flight hours as an input.

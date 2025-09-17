@@ -1,0 +1,7 @@
+.DS_Store
+Thumbs.db
+analysis/*_cache/
+analysis/*_files/
+.Rproj.user/
+.Rhistory
+.RData
