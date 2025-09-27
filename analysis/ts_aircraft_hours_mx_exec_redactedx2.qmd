@@ -55,20 +55,19 @@ mx <- read_excel("data.xlsx", sheet = "MX Costs - Data")
 df <- mx %>%
   left_join(fhrs, by = c("Month","Aircraft")) %>%
   select(c("Aircraft","Month", "Total Maintenance", "total_flight_hours"))
-glex_df <- df %>% filter(Aircraft == "Global Express") %>% select(-Aircraft)
-lear_df <- df %>% filter(Aircraft == "Learjet60") %>% select(-Aircraft)
+largejet_df <- df %>% filter(Aircraft == "large jet") %>% select(-Aircraft)
+lear_df <- df %>% filter(Aircraft == "smalljet") %>% select(-Aircraft)
 
 #extract the numeric data
-mat <- as.matrix(glex_df %>% select(-Month)) #GLOBAL
+mat <- as.matrix(largejet_df %>% select(-Month)) #GLOBAL
 #build ts object (April 2021 → start = c(2021,4))
-glex_ts_df <- ts(mat,start = c(2021, 4), frequency = 12)
+largejet_ts_df <- ts(mat,start = c(2021, 4), frequency = 12)
 
 mat <- as.matrix(lear_df %>% select(-Month)) #LEAR
 lear_ts_df <- ts(mat,start = c(2022, 5), frequency = 12)
 ```
 
-
-# Global Express {.no-break}
+# large jet {.no-break}
 
 ::: callout-important
 ## Executive summary
@@ -87,7 +86,7 @@ lear_ts_df <- ts(mat,start = c(2022, 5), frequency = 12)
 
 ```{r}
 #A. Estimate the Trend Component
-global_ex.mx = glex_ts_df[, "Total_Maintenance"]
+global_ex.mx = largejet_ts_df[, "Total_Maintenance"]
 global_ex.mx.yr=aggregate(global_ex.mx,FUN=mean) #annual data
 # Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
 global_ex.mx.12=ma.smooth.wge(global_ex.mx,order=12,plot=FALSE)
@@ -200,14 +199,14 @@ Monthly costs show short‑term reversals and a recurring cycle about every 4 mo
 #Only returns the plot
 invisible(
     capture.output(
-        plotts.sample.wge(glex_ts_df[,"Total_Maintenance"]),
+        plotts.sample.wge(largejet_ts_df[,"Total_Maintenance"]),
         file = NULL
     )
 )
 
 invisible(
     capture.output(
-        plotts.sample.wge(log(glex_ts_df[,"Total_Maintenance"]+1)),
+        plotts.sample.wge(log(largejet_ts_df[,"Total_Maintenance"]+1)),
         file = NULL
     )
 )
@@ -239,7 +238,7 @@ In short, maintenance costs demonstrate clear quarterly cyclicality, with costs 
 ### Flight Hours {.break}
 
 ```{r}
-global_ex.fhrs = glex_ts_df[, "total_flight_hours"]
+global_ex.fhrs = largejet_ts_df[, "total_flight_hours"]
 #A. Estimate the Trend Component
 global_ex.fhrs.yr=aggregate(global_ex.fhrs,FUN=mean) #annual data
 # Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
@@ -320,7 +319,7 @@ plotts.wge(global_ex.fhrs.noise, style=1, xlab = "Year", ylab = "Flight Hours",
 #Only returns the plot
 invisible(
     capture.output(
-        plotts.sample.wge(glex_ts_df[,"total_flight_hours"]),
+        plotts.sample.wge(largejet_ts_df[,"total_flight_hours"]),
         file = NULL
     )
 )
@@ -501,11 +500,11 @@ ggplot(df, aes(x=Date)) +
 **Why this matters:** Produces consistent month-ahead projections for both series and captures cross-effects without over-relying on any single trend.
 
 ```{r}
-ccf(log(glex_ts_df[,"Total_Maintenance"] + 1), glex_ts_df[,"total_flight_hours"])
+ccf(log(largejet_ts_df[,"Total_Maintenance"] + 1), largejet_ts_df[,"total_flight_hours"])
 #Indicates a lag correlation of 9 months!
 # ── 0. Setup ─────────────────────────────────────────────────────────────
-log_mx <- log(glex_ts_df[,"Total_Maintenance"] + 1) 
-hrs    <- glex_ts_df[,"total_flight_hours"]
+log_mx <- log(largejet_ts_df[,"Total_Maintenance"] + 1) 
+hrs    <- largejet_ts_df[,"total_flight_hours"]
 Y      <- cbind(log_mx, hrs)
 
 # ── 1. Stationarise each series ─────────────────────────────────────────
@@ -565,8 +564,8 @@ ljung.wge(resid(fit)[,1], p = popt, K = 24)$pval
 # ── 5. Forecast 12 months ahead & evaluate ──────────────────────────────
 split_pt      <- end(na.omit(global_ex.seas.fhrs))                  # Apr-2024 cutoff
 st_pt         <- c(split_pt[1] - 1, split_pt[2])
-train_idx     <- window(glex_ts_df, end = split_pt)
-test_idx      <- window(glex_ts_df, start = st_pt)
+train_idx     <- window(largejet_ts_df, end = split_pt)
+test_idx      <- window(largejet_ts_df, start = st_pt)
 
 log_mx_tr     <- log(train_idx[,"Total_Maintenance"] + 1)
 hrs_tr        <- train_idx[,"total_flight_hours"]
@@ -584,10 +583,10 @@ rmse_raw      <- sqrt(mean((test_idx[,"Total_Maintenance"] - mx_hat)^2))
 rmse_raw
 
 # ── 6. Plot actual vs. forecast ─────────────────────────────────────────
-times     <- as.numeric(time(glex_ts_df))
+times     <- as.numeric(time(largejet_ts_df))
 test_t    <- tail(times,6)
 # forecasts
-plot(times, glex_ts_df[,"Total_Maintenance"], type = "o", pch = 20,
+plot(times, largejet_ts_df[,"Total_Maintenance"], type = "o", pch = 20,
      ylab = "Maintenance ($)", xlab = "Time")
 points(test_t, mx_hat, type = "o", pch = 1, col = 2)
 legend("topleft", legend = c("Actual", "Forecast"), pch = c(20,1), col = c(1,2))
@@ -601,7 +600,7 @@ legend("topleft", legend = c("Actual", "Forecast"), pch = c(20,1), col = c(1,2))
 
 ```{r}
 Y_full   <- cbind(
-  log_mx = log(glex_ts_df[,"Total_Maintenance"] + 1), hrs = glex_ts_df[,"total_flight_hours"])
+  log_mx = log(largejet_ts_df[,"Total_Maintenance"] + 1), hrs = largejet_ts_df[,"total_flight_hours"])
 var_full <- VAR(Y_full, p = popt, type = type_choice,)
 
 fc_full  <- predict(var_full, n.ahead = 6, ci = 0.95)$fcst
@@ -661,7 +660,7 @@ mx_hi <-  mx_fc + z*se_d
 
 ```{r}
 # 3) Turn both into ts objects with monthly frequency
-actual_ts   <- ts(glex_ts_df[,"Total_Maintenance"], start = start(glex_ts_df), 
+actual_ts   <- ts(largejet_ts_df[,"Total_Maintenance"], start = start(largejet_ts_df), 
                   frequency = 12)
 
 # The forecast starts the month after the last observation:
@@ -714,21 +713,20 @@ We receive flight hours for month t about two weeks before maintenance costs for
 
 Because VAR works with at least 2 endogenous variables, and because we are turning Flight Hours into a exogenous variables for the purpose of maintaining more realistic modeling expectations of the flow and delivery sequences of the data, we will include two additional variables in additional to Total Maintenance. These are Parts & Labor, which are sub-costs of Total Maintenance. In addition to improving the functionality of the model, these variables may also prove to explain additional makeup of the analyses and forecasts.
 
-
 ```{r}
 # ── 0) Setup ────────────────────────────────────────────────────────────
 df <- mx %>% left_join(fhrs, by = c("Month","Aircraft")) %>% select(c("Aircraft","Month", "Total_Maintenance", "Parts", "Labor", "total_flight_hours"))
-glex_df <- df %>% filter(Aircraft == "Global Express") %>% select(-Aircraft)
+largejet_df <- df %>% filter(Aircraft == "large jet") %>% select(-Aircraft)
 
 #extract the numeric data
-mat <- as.matrix(glex_df %>% select(-Month)) #GLOBAL
+mat <- as.matrix(largejet_df %>% select(-Month)) #GLOBAL
 #build ts object (April 2021 → start = c(2021,4))
-glex_ts_df <- ts(mat,start = c(2021, 4), frequency = 12)
+largejet_ts_df <- ts(mat,start = c(2021, 4), frequency = 12)
 
 # --- Endogenous Variables ---
-log_mx    <- log(glex_ts_df[,"Total_Maintenance"] + 1)
-log_parts <- log(glex_ts_df[,"Parts"] + 1)
-log_labor <- log(glex_ts_df[,"Labor"] + 1)
+log_mx    <- log(largejet_ts_df[,"Total_Maintenance"] + 1)
+log_parts <- log(largejet_ts_df[,"Parts"] + 1)
+log_labor <- log(largejet_ts_df[,"Labor"] + 1)
 Y_raw <- cbind(log_mx, log_parts,log_labor)
 colnames(Y_raw) <- c("log_mx","log_parts","log_labor")
 
@@ -743,7 +741,7 @@ names(Y_endog) <- colnames(Y_raw)
 Y_endog
 
 # --- Exogenous hours in levels with lags by slicing (keeps tail) ---
-hrs    <- glex_ts_df[,"total_flight_hours"]
+hrs    <- largejet_ts_df[,"total_flight_hours"]
 # Exogenous block: contemporaneous hours and 1–2 lags (adjust as needed).
 # If prefer stationarity in X, replace hrs with diff(hrs) below.
 X_exog <- cbind(H_t = hrs, 
@@ -760,9 +758,9 @@ drop  <- max(apply(cbind(Y_stable, X_stable), 2, nlead), na.rm=TRUE)
 Y <- Y_stable[(drop+1):nrow(Y_stable), , drop=FALSE]
 X <- X_stable[(drop+1):nrow(X_stable), , drop=FALSE]
 # ts metadata
-start_time <- time(glex_ts_df)[nrow(glex_ts_df) - nrow(Y) + 1]
-Y <- ts(Y, start=start_time, frequency=frequency(glex_ts_df))
-X <- ts(X, start=start_time, frequency=frequency(glex_ts_df))
+start_time <- time(largejet_ts_df)[nrow(largejet_ts_df) - nrow(Y) + 1]
+Y <- ts(Y, start=start_time, frequency=frequency(largejet_ts_df))
+X <- ts(X, start=start_time, frequency=frequency(largejet_ts_df))
 
 
 # ── 1) Deterministic term via WBG on the modeled series ────────────────
@@ -811,7 +809,7 @@ log_fc <- pred_te$log_mx[,"fcst"]
 mx_hat <- exp(log_fc) - 1
 
 # testing metrics and plot (same style as your VAR)
-actual_ts <- ts(glex_ts_df[,"Total_Maintenance"], start=start(glex_ts_df), frequency=12)
+actual_ts <- ts(largejet_ts_df[,"Total_Maintenance"], start=start(largejet_ts_df), frequency=12)
 mx_obs    <- tail(actual_ts, h)
 rmse_raw  <- sqrt(mean((as.numeric(mx_obs) - mx_hat)^2, na.rm=TRUE))
 
@@ -836,7 +834,7 @@ nowcast_err_pct <- nowcast_err_abs / max(1, as.numeric(mx_obs)[1])
 h   <- 6
 Tn  <- nrow(Y)
 idx0 <- Tn - h
-actual_ts <- ts(glex_ts_df[,"Total_Maintenance"], start=start(glex_ts_df), frequency=12)
+actual_ts <- ts(largejet_ts_df[,"Total_Maintenance"], start=start(largejet_ts_df), frequency=12)
 times <- time(actual_ts)
 
 # helper: build dumvar from realized hours
@@ -958,7 +956,7 @@ build_X_future <- function(H_hist, H_future){
 ## --- refit like testing
 p_o   <- VARselect(Y, lag.max = 2, type=type_choice, exogen=X)$selection[["AIC(n)"]]
 fit_full  <- VAR(Y, p = 1, type = type_choice, exogen = X)
-actual_ts <- ts(glex_ts_df[,"Total_Maintenance"], start = start(glex_ts_df), frequency = 12)
+actual_ts <- ts(largejet_ts_df[,"Total_Maintenance"], start = start(largejet_ts_df), frequency = 12)
 H_hist    <- as.numeric(X[,"H_t"])
 
 ## --- horizon and hours path: known H_{t+1}, then carry-forward
@@ -1036,7 +1034,7 @@ legend("topleft", c("Actual","Forecast","95% CI","Nowcast (t+1)"),
 -   **If we also need an hours forecast:** We run a simple hours forecast and **feed those results into the maintenance model** so both move together.
 -   **Method consistency:** Same settings as the baseline VAR. The **only change** is adding flight hours as an input.
 
-# Learjet 60
+# small jet
 
 ::: callout-important
 ## Executive summary
@@ -1055,43 +1053,43 @@ legend("topleft", c("Actual","Forecast","95% CI","Nowcast (t+1)"),
 
 ```{r}
 #A. Estimate the Trend Component
-lear60.mx = lear_ts_df[, "Total_Maintenance"]
-lear60.mx.yr=aggregate(lear60.mx,FUN=mean) #annual data
+smalljet.mx = lear_ts_df[, "Total_Maintenance"]
+smalljet.mx.yr=aggregate(smalljet.mx,FUN=mean) #annual data
 # Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
-lear60.mx.12=ma.smooth.wge(lear60.mx,order=12,plot=FALSE)
-lear60.mx.sm12=ts(lear60.mx.12$smooth,start=c(2022,3),frequency=12)
+smalljet.mx.12=ma.smooth.wge(smalljet.mx,order=12,plot=FALSE)
+smalljet.mx.sm12=ts(smalljet.mx.12$smooth,start=c(2022,3),frequency=12)
 
 #B. Remove the Trend Component from the Data
-lear60.seas.mx=lear60.mx-lear60.mx.sm12 #Isolate Seasonality + Noise
-# end(na.omit(lear60.mx - lear60.mx.sm12)) #sanity check
+smalljet.seas.mx=smalljet.mx-smalljet.mx.sm12 #Isolate Seasonality + Noise
+# end(na.omit(smalljet.mx - smalljet.mx.sm12)) #sanity check
 
 #C. Calculate an “Average” Within- year Seasonal Component
-lear60.seas.mx.numeric=as.numeric(na.omit(lear60.seas.mx))
+smalljet.seas.mx.numeric=as.numeric(na.omit(smalljet.seas.mx))
 # convert to a matrix (ncol= number of years)
 # will give monthly means beginning with first non-na month
 #set month below in ts object
-lear60.seas.mx.matrix=matrix(lear60.seas.mx.numeric,nrow = 12)
-lear60.seas.mx.matrix.t=t(lear60.seas.mx.matrix)
-lear60.mx.months=colMeans(lear60.seas.mx.matrix.t, na.rm=TRUE)
+smalljet.seas.mx.matrix=matrix(smalljet.seas.mx.numeric,nrow = 12)
+smalljet.seas.mx.matrix.t=t(smalljet.seas.mx.matrix)
+smalljet.mx.months=colMeans(smalljet.seas.mx.matrix.t, na.rm=TRUE)
 # replicates the 12 monthly means for each year (12)
-first_ok <- start(na.omit(lear60.seas.mx))
-end_ok   <- end(na.omit(lear60.seas.mx))
-len_ok   <- length(na.omit(lear60.seas.mx))
-lear60.mx.seas.means=rep(lear60.mx.months,6) 
-lear60.mx.seas.means=ts(lear60.mx.seas.means,start=first_ok,frequency=12, end = end_ok)
+first_ok <- start(na.omit(smalljet.seas.mx))
+end_ok   <- end(na.omit(smalljet.seas.mx))
+len_ok   <- length(na.omit(smalljet.seas.mx))
+smalljet.mx.seas.means=rep(smalljet.mx.months,6) 
+smalljet.mx.seas.means=ts(smalljet.mx.seas.means,start=first_ok,frequency=12, end = end_ok)
 
 #D. Find the Remaining Noise Component
-lear60.mx.noise=lear60.mx-lear60.mx.sm12-lear60.mx.seas.means #Noise Estimate
+smalljet.mx.noise=smalljet.mx-smalljet.mx.sm12-smalljet.mx.seas.means #Noise Estimate
 
 #Plot Data
 # Data
-t_idx <- time(lear60.mx) # 1. get the fractional‐year index
+t_idx <- time(smalljet.mx) # 1. get the fractional‐year index
 breaks_frac <- seq(min(t_idx), max(t_idx), by = 0.25) # 2. define the breaks(0.25 year)
 # 3. turn into real Dates & labels
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(lear60.mx, style=1, xlab = "Year", ylab = "Maintenance Costs",
-           main = "MX Data (lear60)") +
+plotts.wge(smalljet.mx, style=1, xlab = "Year", ylab = "Maintenance Costs",
+           main = "MX Data (smalljet)") +
   scale_y_continuous(breaks = pretty_breaks(n = 8),
                      labels = label_number(
                        scale  = 1/1000,        # divide raw values by 1,000
@@ -1103,11 +1101,11 @@ plotts.wge(lear60.mx, style=1, xlab = "Year", ylab = "Maintenance Costs",
                        angle = 90, vjust = 0.5, size = 8))
 
 # Trend
-tmas_idx <- time(na.omit(lear60.mx.sm12))
+tmas_idx <- time(na.omit(smalljet.mx.sm12))
 breaks_frac <- seq(min(tmas_idx), max(tmas_idx), by = 0.25)
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(na.omit(lear60.mx.sm12), style=1, xlab = "Year", ylab = "Maintenance Costs",
+plotts.wge(na.omit(smalljet.mx.sm12), style=1, xlab = "Year", ylab = "Maintenance Costs",
            main = "MX Data (Est. Trend)") +
   scale_y_continuous(breaks = pretty_breaks(n = 8),
                      labels = label_number(
@@ -1119,11 +1117,11 @@ plotts.wge(na.omit(lear60.mx.sm12), style=1, xlab = "Year", ylab = "Maintenance 
                      labels = labels_date) + theme(axis.text.x = element_text(
                        angle = 90, vjust = 0.5, size = 8))
 # Season
-tsm_idx <- time(na.omit(lear60.mx.seas.means))
+tsm_idx <- time(na.omit(smalljet.mx.seas.means))
 breaks_frac <- seq(min(tsm_idx), max(tsm_idx), by = 0.25)
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(lear60.mx.seas.means, style=1, xlab = "Year", ylab = "Maintenance Costs",
+plotts.wge(smalljet.mx.seas.means, style=1, xlab = "Year", ylab = "Maintenance Costs",
            main = "MX Data (Seasonal Component)") +
   scale_y_continuous(breaks = pretty_breaks(n = 8),
                      labels = label_number(
@@ -1135,11 +1133,11 @@ plotts.wge(lear60.mx.seas.means, style=1, xlab = "Year", ylab = "Maintenance Cos
                      labels = labels_date) + theme(axis.text.x = element_text(
                        angle = 90, vjust = 0.5, size = 8))
 # Noise
-tnz_idx <- time(na.omit(lear60.mx.noise))
+tnz_idx <- time(na.omit(smalljet.mx.noise))
 breaks_frac <- seq(min(tnz_idx), max(tnz_idx), by = 0.25)
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(lear60.mx.noise, style=1, xlab = "Year", ylab = "Maintenance Costs",
+plotts.wge(smalljet.mx.noise, style=1, xlab = "Year", ylab = "Maintenance Costs",
            main = "MX Data (Noise)") +
   scale_y_continuous(breaks = pretty_breaks(n = 8),
                      labels = label_number(
@@ -1197,77 +1195,77 @@ The original data showed significant spikes due to a few extreme cost events. By
 ### Flight Hours {.break}
 
 ```{r}
-lear60.fhrs = lear_ts_df[, "total_flight_hours"]
+smalljet.fhrs = lear_ts_df[, "total_flight_hours"]
 #A. Estimate the Trend Component
-lear60.fhrs.yr=aggregate(lear60.fhrs,FUN=mean) #annual data
+smalljet.fhrs.yr=aggregate(smalljet.fhrs,FUN=mean) #annual data
 # Centered Moving Average Smoother (12 Month) AKA TREND ESTIMATION
-lear60.fhrs.6=ma.smooth.wge(lear60.fhrs,order=12,plot=FALSE)
-lear60.fhrs.sm6=ts(lear60.fhrs.6$smooth,start=c(2022,5),frequency=12)
+smalljet.fhrs.6=ma.smooth.wge(smalljet.fhrs,order=12,plot=FALSE)
+smalljet.fhrs.sm6=ts(smalljet.fhrs.6$smooth,start=c(2022,5),frequency=12)
 
 #B. Remove the Trend Component from the Data
-lear60.seas.fhrs=lear60.fhrs-lear60.fhrs.sm6 #Isolate Seasonality + Noise
-# end(na.omit(lear60.fhrs - lear60.fhrs.sm6)) #sanity check
+smalljet.seas.fhrs=smalljet.fhrs-smalljet.fhrs.sm6 #Isolate Seasonality + Noise
+# end(na.omit(smalljet.fhrs - smalljet.fhrs.sm6)) #sanity check
 
 #C. Calculate an “Average” Within- year Seasonal Component
-lear60.seas.fhrs.numeric=as.numeric(na.omit(lear60.seas.fhrs))
+smalljet.seas.fhrs.numeric=as.numeric(na.omit(smalljet.seas.fhrs))
 # convert to a matrix (ncol= number of years)
 # will give monthly means beginning with first non-na month
 #ncol = years, nrow = months
-lear60.seas.fhrs.matrix=matrix(lear60.seas.fhrs.numeric,nrow = 12)
-lear60.seas.fhrs.matrix.t=t(lear60.seas.fhrs.matrix)
-lear60.fhrs.months=colMeans(lear60.seas.fhrs.matrix.t, na.rm=TRUE)
+smalljet.seas.fhrs.matrix=matrix(smalljet.seas.fhrs.numeric,nrow = 12)
+smalljet.seas.fhrs.matrix.t=t(smalljet.seas.fhrs.matrix)
+smalljet.fhrs.months=colMeans(smalljet.seas.fhrs.matrix.t, na.rm=TRUE)
 # replicates the 12 monthly means for each year (5)
-first_ok <- start(na.omit(lear60.seas.fhrs))
-end_ok   <- end(na.omit(lear60.seas.fhrs))
-len_ok   <- length(na.omit(lear60.seas.fhrs))
-lear60.fhrs.seas.means=rep(lear60.fhrs.months,6) 
-lear60.fhrs.seas.means=ts(lear60.fhrs.seas.means,start=first_ok,frequency=12,end = end_ok)
+first_ok <- start(na.omit(smalljet.seas.fhrs))
+end_ok   <- end(na.omit(smalljet.seas.fhrs))
+len_ok   <- length(na.omit(smalljet.seas.fhrs))
+smalljet.fhrs.seas.means=rep(smalljet.fhrs.months,6) 
+smalljet.fhrs.seas.means=ts(smalljet.fhrs.seas.means,start=first_ok,frequency=12,end = end_ok)
 
 #D. Find the Remaining Noise Component
-lear60.fhrs.noise=lear60.fhrs-lear60.fhrs.sm6-lear60.fhrs.seas.means #Noise Estimate
+smalljet.fhrs.noise=smalljet.fhrs-smalljet.fhrs.sm6-smalljet.fhrs.seas.means #Noise Estimate
 
 #Plot Data
 # Data
-t_idx <- time(lear60.fhrs) # 1. get the fractional‐year index
+t_idx <- time(smalljet.fhrs) # 1. get the fractional‐year index
 breaks_frac <- seq(min(t_idx), max(t_idx), by = 0.25) # 2. define the breaks(0.25 year)
 # 3. turn into real Dates & labels
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(lear60.fhrs, style=1, xlab = "Year", ylab = "Flight Hours",
-           main = "Flight Hours (lear60)") +
+plotts.wge(smalljet.fhrs, style=1, xlab = "Year", ylab = "Flight Hours",
+           main = "Flight Hours (smalljet)") +
   scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
   scale_x_continuous(breaks = breaks_frac, 
                      labels = labels_date) + theme(axis.text.x = element_text(
                        angle = 90, vjust = 0.5, size = 8))
 
 # Trend
-tmas_idx <- time(na.omit(lear60.fhrs.sm6))
+tmas_idx <- time(na.omit(smalljet.fhrs.sm6))
 breaks_frac <- seq(min(tmas_idx), max(tmas_idx), by = 0.25)
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(na.omit(lear60.fhrs.sm6), style=1, xlab = "Year", ylab = "Flight Hours",
+plotts.wge(na.omit(smalljet.fhrs.sm6), style=1, xlab = "Year", ylab = "Flight Hours",
            main = "Flight Hours (Est. Trend)") +
   scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
   scale_x_continuous(breaks = breaks_frac, 
                      labels = labels_date) + theme(axis.text.x = element_text(
                        angle = 90, vjust = 0.5, size = 8))
 # Season
-tsm_idx <- time(na.omit(lear60.fhrs.seas.means))
+tsm_idx <- time(na.omit(smalljet.fhrs.seas.means))
 breaks_frac <- seq(min(tsm_idx), max(tsm_idx), by = 0.25)
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(lear60.fhrs.seas.means, style=1, xlab = "Year", ylab = "Flight Hours",
+plotts.wge(smalljet.fhrs.seas.means, style=1, xlab = "Year", ylab = "Flight Hours",
            main = "Flight Hours (Seasonal Component)") +
   scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
   scale_x_continuous(breaks = breaks_frac, 
                      labels = labels_date) + theme(axis.text.x = element_text(
                        angle = 90, vjust = 0.5, size = 8))
 # Noise
-tnz_idx <- time(na.omit(lear60.fhrs.noise))
+tnz_idx <- time(na.omit(smalljet.fhrs.noise))
 breaks_frac <- seq(min(tnz_idx), max(tnz_idx), by = 0.25)
 breaks_date  <- as.Date(as.yearmon(breaks_frac)) 
 labels_date  <- format(breaks_date, "%b %Y")
-plotts.wge(lear60.fhrs.noise, style=1, xlab = "Year", ylab = "Flight Hours",
+plotts.wge(smalljet.fhrs.noise, style=1, xlab = "Year", ylab = "Flight Hours",
            main = "Flight Hours (Noise)") +
   scale_y_continuous(breaks = pretty_breaks(n = 6)) + theme(axis.text.y = element_text(size = 8)) +
   scale_x_continuous(breaks = breaks_frac, 
@@ -1316,9 +1314,9 @@ Forecasting efforts should prioritize capturing short-term momentum (recent acti
 ```{r}
 # 1) Combine Data to Dataframe
 df <- data.frame(
-  Date        = as.Date(as.yearmon(time(lear60.mx))),
-  Maintenance = as.numeric(lear60.mx),
-  FlightHours = as.numeric(lear60.fhrs)
+  Date        = as.Date(as.yearmon(time(smalljet.mx))),
+  Maintenance = as.numeric(smalljet.mx),
+  FlightHours = as.numeric(smalljet.fhrs)
 )
 
 # 2) Compute a scale factor so FlightHours*factor ≈ Maintenance range
@@ -1356,14 +1354,14 @@ ggplot(df, aes(x=Date)) +
 
 ```{r}
 # full‐length maintenance
-mx_ts    <- lear60.mx
+mx_ts    <- smalljet.mx
 df_full  <- data.frame(
   Date        = as.Date(as.yearmon(time(mx_ts))),
   Maintenance = as.numeric(mx_ts)
 )
 
 # seasonal maintenance (shorter)
-seas_ts   <- lear60.mx.seas.means
+seas_ts   <- smalljet.mx.seas.means
 df_seas  <- data.frame(
   Date                  = as.Date(as.yearmon(time(seas_ts))),
   Maintenance_Seasonal  = as.numeric(seas_ts)
@@ -1411,8 +1409,8 @@ ggplot() +
 
 ```{r}
 # 1) Your two seasonal series, with Date index
-mx_seas <- lear60.mx.seas.means
-fh_seas <- lear60.fhrs.seas.means 
+mx_seas <- smalljet.mx.seas.means
+fh_seas <- smalljet.fhrs.seas.means 
 dates   <- as.Date(as.yearmon(time(mx_seas)))
 
 df <- data.frame(
@@ -1518,7 +1516,7 @@ ljung.wge(resid(fit)[,1], p = popt, K = 24)$pval
 
 ```{r}
 # ── 5. Forecast 12 months ahead & evaluate ──────────────────────────────
-split_pt      <- end(na.omit(lear60.seas.fhrs))                  # Apr-2024 cutoff
+split_pt      <- end(na.omit(smalljet.seas.fhrs))                  # Apr-2024 cutoff
 st_pt         <- c(split_pt[1] - 1, split_pt[2])
 train_idx     <- window(lear_ts_df, end = split_pt)
 test_idx      <- window(lear_ts_df, start = st_pt)
@@ -1615,11 +1613,10 @@ We receive flight hours for month t about two weeks before maintenance costs for
 
 Because VAR works with at least 2 endogenous variables, and because we are turning Flight Hours into a exogenous variables for the purpose of maintaining more realistic modeling expectations of the flow and delivery sequences of the data, we will include two additional variables in additional to Total Maintenance. These are Parts & Labor, which are sub-costs of Total Maintenance. In addition to improving the functionality of the model, these variables may also prove to explain additional makeup of the analyses and forecasts.
 
-
 ```{r}
 # # ── 0) Setup ────────────────────────────────────────────────────────────
 df <- mx %>% left_join(fhrs, by = c("Month","Aircraft")) %>% select(c("Aircraft","Month", "Total_Maintenance", "Parts", "Labor", "total_flight_hours"))
-lear_df <- df %>% filter(Aircraft == "Learjet60") %>% select(-Aircraft)
+lear_df <- df %>% filter(Aircraft == "smalljet") %>% select(-Aircraft)
 
 #extract the numeric data
 mat <- as.matrix(lear_df %>% select(-Month)) #GLOBAL
