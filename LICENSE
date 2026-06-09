@@ -1,21 +1,9 @@
-MIT License
+Copyright © 2026 Will Schneider. All rights reserved.
 
-Copyright (c) 2025 Will Schneider
+This repository and its contents are made available for human portfolio review, educational inspection, and professional evaluation only.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+No permission is granted to copy, modify, distribute, sublicense, scrape, bulk download, index, embed, train on, fine-tune on, benchmark against, summarize, transform, translate, vectorize, classify, or use this repository or its contents for artificial intelligence, machine learning, dataset construction, retrieval systems, code synthesis, code explanation datasets, statistical-method extraction, authorial style imitation, or derivative automated systems without prior written permission.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+These restrictions apply to all source code, documentation, examples, outputs, comments, commit history, rendered files, notebooks, scripts, and derived material in this repository unless explicit written permission is granted by the author.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+For permission requests, contact: schneiderw94@gmail.com
